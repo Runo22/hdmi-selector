@@ -118,6 +118,7 @@ Default bind: `127.0.0.1:8420`. Auth is off unless a token is configured.
 | `GET /api/health` | `{ "status": "ok", "backend": "windows" }` |
 | `GET /api/displays` | List all displays with active/primary/geometry |
 | `POST /api/switch` | Body `{ "mode": "exclusive\|extend\|duplicate", "ids": ["..."] }` |
+| `GET`/`POST /api/toggle` | Flip to the next display (for two monitors, back-and-forth). No id or body needed. Returns the `activated` display. |
 | `POST /api/displays/{id}/activate` | Exclusive-activate one display (convenience) |
 | `POST /api/displays/{id}/mode` | Body `{ "width": N, "height": N, "hz": N? }` — set resolution (+ optional refresh; omit `hz` for the max at that size). Persisted per monitor. |
 | `POST /api/displays/{id}/maxhz` | Raise the display to the highest refresh rate at its current resolution |
@@ -138,6 +139,27 @@ curl -X POST http://127.0.0.1:8420/api/switch \
 # Convenience: activate one display
 curl -X POST http://127.0.0.1:8420/api/displays/<monitor-id>/activate
 ```
+
+### One-URL toggle
+
+To flip between your two monitors with a single request — no id, no body, no
+method configuration — just fetch the toggle URL:
+
+```
+http://<pc-ip>:8420/api/toggle
+```
+
+```bash
+# Plain GET flips to the other display and returns which one is now active
+curl http://<pc-ip>:8420/api/toggle
+# -> {"ok":true,"activated":{"id":"...","name":"Living Room TV"}, "displays":[...]}
+
+# With a token (bound to the LAN): pass it as a query parameter
+curl "http://<pc-ip>:8420/api/toggle?token=MY_SECRET"
+```
+
+Any HTTP client that can fetch a URL can drive this — call it once to switch to
+the other monitor, call it again to switch back.
 
 ### Exposing to the LAN
 ```powershell

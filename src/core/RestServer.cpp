@@ -119,6 +119,23 @@ struct RestServer::Impl {
                                         "application/json");
                     });
 
+        // Stateless toggle to the next display (no id/body needed). Exposed on
+        // GET and POST so a plain URL works from simple HTTP clients.
+        auto toggleHandler = [this](const httplib::Request&, httplib::Response& res) {
+            std::string id, name, err;
+            if (!manager.toggle(&id, &name, &err)) {
+                return sendError(res, 400, err);
+            }
+            json arr = json::array();
+            for (const auto& d : manager.displays()) arr.push_back(displayToJson(d));
+            res.set_content(
+                json{{"ok", true}, {"activated", {{"id", id}, {"name", name}}}, {"displays", arr}}
+                    .dump(),
+                "application/json");
+        };
+        server.Get("/api/toggle", toggleHandler);
+        server.Post("/api/toggle", toggleHandler);
+
         // Set a display's resolution (+ optional refresh). hz omitted/<=0 picks
         // the highest rate at that resolution. Selection is persisted.
         server.Post(R"(/api/displays/([^/]+)/mode)",

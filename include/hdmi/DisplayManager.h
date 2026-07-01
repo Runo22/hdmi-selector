@@ -36,6 +36,11 @@ public:
     // Convenience for the primary use case: make `id` the only active display.
     bool activateExclusive(const std::string& id, std::string* error);
 
+    // Stateless toggle: exclusively activate the next display after the current
+    // primary (cycles; for two displays this flips between them). No id needed.
+    // On success, `activatedId`/`activatedName` (if non-null) name the result.
+    bool toggle(std::string* activatedId, std::string* activatedName, std::string* error);
+
     // Change a display's mode. hz<=0 selects the highest refresh at that size.
     bool setMode(const std::string& id, int width, int height, int hz, std::string* error);
 

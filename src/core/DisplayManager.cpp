@@ -95,6 +95,39 @@ bool DisplayManager::activateExclusive(const std::string& id, std::string* error
     return apply(req, error);
 }
 
+bool DisplayManager::toggle(std::string* activatedId, std::string* activatedName,
+                            std::string* error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto list = backend_->list();
+    if (list.empty()) {
+        if (error) *error = "no displays detected";
+        return false;
+    }
+
+    // Pick the display after the current primary (or first active), wrapping.
+    int cur = -1;
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (list[i].primary) { cur = static_cast<int>(i); break; }
+    }
+    if (cur < 0) {
+        for (size_t i = 0; i < list.size(); ++i) {
+            if (list[i].active) { cur = static_cast<int>(i); break; }
+        }
+    }
+    const size_t next = (cur < 0) ? 0 : (static_cast<size_t>(cur) + 1) % list.size();
+
+    SwitchRequest req;
+    req.topology = Topology::Exclusive;
+    req.activeIds = {list[next].id};
+    if (!validateLocked(req, error)) return false;
+    if (!backend_->apply(req, error)) return false;
+    applySavedModesLocked();
+
+    if (activatedId) *activatedId = list[next].id;
+    if (activatedName) *activatedName = list[next].name;
+    return true;
+}
+
 bool DisplayManager::setMode(const std::string& id, int width, int height, int hz,
                              std::string* error) {
     std::lock_guard<std::mutex> lock(mutex_);

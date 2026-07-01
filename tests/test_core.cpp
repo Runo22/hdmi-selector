@@ -141,6 +141,17 @@ void testPersistence() {
     std::remove(path.c_str());
 }
 
+void testToggle() {
+    auto mgr = makeManager();
+    std::string id, name, err;
+    // monitor is active by default -> toggle activates tv.
+    check(mgr->toggle(&id, &name, &err), "toggle succeeds");
+    check(id == "tv", "toggle switches to the other display (tv)");
+    check(mgr->displays()[1].active && !mgr->displays()[0].active, "tv active, monitor off");
+    // Toggling again flips back.
+    check(mgr->toggle(&id, &name, &err) && id == "monitor", "toggle flips back to monitor");
+}
+
 void testConnectorNumbering() {
     auto mk = [](std::string id, std::string conn) {
         hdmi::DisplayInfo d;
@@ -177,6 +188,7 @@ int main() {
     testValidation();
     testSetMode();
     testPersistence();
+    testToggle();
     testConnectorNumbering();
     testTopologyStrings();
 
