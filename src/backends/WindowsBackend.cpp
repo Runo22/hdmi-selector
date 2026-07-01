@@ -39,26 +39,42 @@ bool queryAllPaths(std::vector<DISPLAYCONFIG_PATH_INFO>& paths,
     return true;
 }
 
-// The stable monitor device path for a path's target, used as the display id.
-std::string targetDevicePath(const DISPLAYCONFIG_PATH_INFO& path) {
-    DISPLAYCONFIG_TARGET_DEVICE_NAME name = {};
-    name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
-    name.header.size = sizeof(name);
-    name.header.adapterId = path.targetInfo.adapterId;
-    name.header.id = path.targetInfo.id;
-    if (DisplayConfigGetDeviceInfo(&name.header) != ERROR_SUCCESS) return {};
-    return toUtf8(name.monitorDevicePath);
+// Human-readable connector type for the UI ("HDMI", "DisplayPort", ...).
+std::string connectorName(DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY tech) {
+    switch (tech) {
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI: return "HDMI";
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL:
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED: return "DisplayPort";
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DVI: return "DVI";
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HD15: return "VGA";
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL: return "Internal";
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_SVIDEO: return "S-Video";
+        case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_COMPOSITE_VIDEO: return "Composite";
+        default: return "";
+    }
 }
 
-std::string targetFriendlyName(const DISPLAYCONFIG_PATH_INFO& path) {
+// Resolved identity + display attributes for a path's target.
+struct TargetInfo {
+    std::string devicePath;  // stable id
+    std::string friendly;    // monitor name
+    std::string connector;   // port type
+};
+
+TargetInfo queryTarget(const DISPLAYCONFIG_PATH_INFO& path) {
     DISPLAYCONFIG_TARGET_DEVICE_NAME name = {};
     name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
     name.header.size = sizeof(name);
     name.header.adapterId = path.targetInfo.adapterId;
     name.header.id = path.targetInfo.id;
     if (DisplayConfigGetDeviceInfo(&name.header) != ERROR_SUCCESS) return {};
+
+    TargetInfo t;
+    t.devicePath = toUtf8(name.monitorDevicePath);
     std::string friendly = toUtf8(name.monitorFriendlyDeviceName);
-    return friendly.empty() ? "Display" : friendly;
+    t.friendly = friendly.empty() ? "Display" : friendly;
+    t.connector = connectorName(name.outputTechnology);
+    return t;
 }
 
 bool pathActive(const DISPLAYCONFIG_PATH_INFO& p) {
@@ -78,12 +94,14 @@ std::vector<DisplayInfo> WindowsBackend::list() {
     std::unordered_map<std::string, size_t> byId;
 
     for (const auto& p : paths) {
-        std::string id = targetDevicePath(p);
-        if (id.empty()) continue;
+        TargetInfo t = queryTarget(p);
+        if (t.devicePath.empty()) continue;
+        const std::string& id = t.devicePath;
 
         DisplayInfo info;
         info.id = id;
-        info.name = targetFriendlyName(p);
+        info.name = t.friendly;
+        info.connector = t.connector;
         info.active = pathActive(p);
 
         if (info.active && p.sourceInfo.modeInfoIdx != DISPLAYCONFIG_PATH_MODE_IDX_INVALID &&
@@ -122,7 +140,7 @@ bool WindowsBackend::apply(const SwitchRequest& request, std::string* error) {
     // Map each requested device path to the first candidate path index.
     std::unordered_map<std::string, size_t> firstPathForId;
     for (size_t i = 0; i < paths.size(); ++i) {
-        std::string id = targetDevicePath(paths[i]);
+        std::string id = queryTarget(paths[i]).devicePath;
         if (!id.empty() && firstPathForId.find(id) == firstPathForId.end()) {
             firstPathForId[id] = i;
         }

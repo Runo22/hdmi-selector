@@ -6,10 +6,12 @@
 namespace hdmi {
 
 namespace {
-DisplayInfo makeDisplay(std::string id, std::string name, bool active, bool primary) {
+DisplayInfo makeDisplay(std::string id, std::string name, std::string connector, bool active,
+                        bool primary) {
     DisplayInfo d;
     d.id = std::move(id);
     d.name = std::move(name);
+    d.connector = std::move(connector);
     d.active = active;
     d.primary = primary;
     d.width = active ? 1920 : 0;
@@ -19,8 +21,10 @@ DisplayInfo makeDisplay(std::string id, std::string name, bool active, bool prim
 }  // namespace
 
 MockBackend::MockBackend() {
-    displays_.push_back(makeDisplay("monitor", "PC Monitor", /*active=*/true, /*primary=*/true));
-    displays_.push_back(makeDisplay("tv", "Living Room TV", /*active=*/false, /*primary=*/false));
+    displays_.push_back(makeDisplay("monitor", "PC Monitor", "DisplayPort",
+                                    /*active=*/true, /*primary=*/true));
+    displays_.push_back(makeDisplay("tv", "Living Room TV", "HDMI",
+                                    /*active=*/false, /*primary=*/false));
 }
 
 MockBackend::MockBackend(std::vector<DisplayInfo> displays)

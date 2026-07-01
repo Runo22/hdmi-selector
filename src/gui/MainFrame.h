@@ -50,6 +50,7 @@ private:
 
     wxPanel* cardRow_ = nullptr;         // holds the horizontal card sizer
     wxBoxSizer* cardSizer_ = nullptr;
+    wxStaticText* statusText_ = nullptr; // footer REST status
 
     wxTimer pollTimer_;
     std::string lastSignature_;          // detects display-config changes

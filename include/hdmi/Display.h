@@ -23,6 +23,10 @@ struct DisplayInfo {
     // Friendly, human-readable name (monitor model / EDID name when known).
     std::string name;
 
+    // Physical connector/port type, e.g. "HDMI" or "DisplayPort". Shown in the
+    // UI beneath the name. May be empty if the OS doesn't report it.
+    std::string connector;
+
     bool active = false;    // currently part of the Windows desktop
     bool primary = false;   // is the primary display
 

@@ -5,8 +5,11 @@
 #include <string>
 #include <vector>
 
+#include "Widgets.h"
 #include "../../resources/app.xpm"  // provides appicon_xpm
 #include "hdmi/Autostart.h"
+
+using namespace hdmi::ui;
 
 namespace hdmi {
 
@@ -26,12 +29,6 @@ enum {
     ID_TrayDisplayBase = wxID_HIGHEST + 100,  // + display index
 };
 
-// Colours used to distinguish the active display card from inactive ones.
-const wxColour kActiveBg(46, 125, 50);      // green
-const wxColour kActiveFg(*wxWHITE);
-const wxColour kInactiveBg(60, 63, 65);     // dark grey
-const wxColour kInactiveFg(220, 220, 220);
-
 constexpr int kPollIntervalMs = 1500;       // display-change detection cadence
 }  // namespace
 
@@ -40,40 +37,70 @@ constexpr int kPollIntervalMs = 1500;       // display-change detection cadence
 // ---------------------------------------------------------------------------
 
 MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
-    : wxFrame(nullptr, wxID_ANY, "HDMI Selector", wxDefaultPosition, wxSize(640, 260)),
+    : wxFrame(nullptr, wxID_ANY, "HDMI Selector", wxDefaultPosition, wxSize(620, 340)),
       manager_(manager),
       restConfig_(restConfig),
       pollTimer_(this) {
     SetIcon(wxICON(appicon));
+    SetBackgroundColour(kWindowBg);
     buildMenu();
 
     auto* root = new wxBoxSizer(wxVERTICAL);
 
-    auto* heading = new wxStaticText(this, wxID_ANY, "Click a display to switch to it");
-    wxFont hf = heading->GetFont();
-    hf.SetPointSize(hf.GetPointSize() + 2);
-    heading->SetFont(hf);
-    root->Add(heading, 0, wxALL, 12);
+    // ---- Header: title + subtitle on the left, inline action chips right ----
+    auto* header = new wxBoxSizer(wxHORIZONTAL);
 
+    auto* titles = new wxBoxSizer(wxVERTICAL);
+    auto* title = new wxStaticText(this, wxID_ANY, "Displays");
+    title->SetFont(uiFont(16, wxFONTWEIGHT_BOLD));
+    title->SetForegroundColour(kTextDark);
+    auto* subtitle = new wxStaticText(this, wxID_ANY, "Choose the screen you want to use");
+    subtitle->SetFont(uiFont(9));
+    subtitle->SetForegroundColour(kTextGray);
+    titles->Add(title);
+    titles->Add(subtitle, 0, wxTOP, 2);
+
+    header->Add(titles, 1, wxALIGN_CENTER_VERTICAL);
+    header->AddStretchSpacer();
+    // Secondary options live here as small chips instead of buried in a menu.
+    header->Add(new Chip(this, "Extend", [this] { applyTopology(Topology::Extend); }), 0,
+                wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+    header->Add(new Chip(this, "Duplicate", [this] { applyTopology(Topology::Duplicate); }), 0,
+                wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+    header->Add(new Chip(this, "Refresh", [this] { rebuildCards(); }), 0,
+                wxALIGN_CENTER_VERTICAL);
+
+    root->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 18);
+
+    // ---- Card row ----
     cardRow_ = new wxPanel(this, wxID_ANY);
+    cardRow_->SetBackgroundColour(kWindowBg);
     cardSizer_ = new wxBoxSizer(wxHORIZONTAL);
     cardRow_->SetSizer(cardSizer_);
-    root->Add(cardRow_, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+    root->Add(cardRow_, 1, wxEXPAND | wxLEFT | wxRIGHT, 14);
+
+    // ---- Footer: subtle REST status with a live dot ----
+    statusText_ = new wxStaticText(this, wxID_ANY, "");
+    statusText_->SetFont(uiFont(8));
+    statusText_->SetForegroundColour(kTextGray);
+    root->Add(statusText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM | wxTOP, 16);
 
     SetSizer(root);
 
     // Start the REST server alongside the GUI so the app can be driven over LAN.
+    // Note: build UTF-8 text explicitly (FromUTF8). Passing non-ASCII directly
+    // through wxString::Format is locale-dependent and unsafe.
     server_ = std::make_unique<RestServer>(manager_, restConfig_);
-    wxString status;
     if (server_->start()) {
-        status = wxString::Format("REST API: http://%s:%d   (backend: %s)",
-                                  restConfig_.host, restConfig_.port, manager_.backendName());
+        const std::string s = "\xE2\x97\x8F  REST API  \xC2\xB7  http://" + restConfig_.host +
+                              ":" + std::to_string(restConfig_.port) + "  \xC2\xB7  backend: " +
+                              manager_.backendName();
+        statusText_->SetLabel(wxString::FromUTF8(s));
     } else {
-        status = wxString::Format("REST API failed to bind %s:%d",
-                                  restConfig_.host, restConfig_.port);
+        statusText_->SetLabel(wxString::FromUTF8("\xE2\x97\x8F  REST API failed to bind " +
+                                                 restConfig_.host + ":" +
+                                                 std::to_string(restConfig_.port)));
     }
-    CreateStatusBar();
-    SetStatusText(status);
 
     // Live refresh: rebuild the view whenever the display set changes.
     Bind(wxEVT_TIMER, [this](wxTimerEvent&) { refreshIfChanged(); });
@@ -177,28 +204,16 @@ void MainFrame::rebuildCards() {
     lastSignature_ = signatureOf(displays);
 
     if (displays.empty()) {
-        cardSizer_->Add(new wxStaticText(cardRow_, wxID_ANY, "No displays detected"), 0,
-                        wxALL, 8);
+        auto* empty = new wxStaticText(cardRow_, wxID_ANY, "No displays detected");
+        empty->SetFont(uiFont(10));
+        empty->SetForegroundColour(kTextGray);
+        cardSizer_->Add(empty, 0, wxALL, 12);
     }
 
+    cardSizer_->AddSpacer(4);
     for (const auto& d : displays) {
-        auto* card = new wxButton(cardRow_, wxID_ANY, wxEmptyString, wxDefaultPosition,
-                                  wxSize(150, 110), wxBORDER_NONE);
-        const bool active = d.active;
-        card->SetBackgroundColour(active ? kActiveBg : kInactiveBg);
-        card->SetForegroundColour(active ? kActiveFg : kInactiveFg);
-
-        wxString label = d.name;
-        if (active) {
-            label += d.primary ? "\n\n[ ACTIVE - primary ]" : "\n\n[ ACTIVE ]";
-        } else {
-            label += "\n\n(click to switch)";
-        }
-        card->SetLabel(label);
-
         const std::string id = d.id;
-        card->Bind(wxEVT_BUTTON, [this, id](wxCommandEvent&) { switchExclusive(id); });
-
+        auto* card = new DisplayCard(cardRow_, d, [this, id] { switchExclusive(id); });
         cardSizer_->Add(card, 0, wxALL, 8);
     }
     cardRow_->Layout();

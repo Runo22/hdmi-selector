@@ -59,7 +59,7 @@ if(HDMI_BUILD_GUI)
     if(wxWidgets_FOUND)
         include(${wxWidgets_USE_FILE})
 
-        set(GUI_SOURCES src/gui/App.cpp src/gui/MainFrame.cpp)
+        set(GUI_SOURCES src/gui/App.cpp src/gui/MainFrame.cpp src/gui/Widgets.cpp)
         if(WIN32)
             enable_language(RC)
             list(APPEND GUI_SOURCES resources/app.rc)  # embeds the .exe icon

@@ -14,6 +14,7 @@ json displayToJson(const DisplayInfo& d) {
     return json{
         {"id", d.id},
         {"name", d.name},
+        {"connector", d.connector},
         {"active", d.active},
         {"primary", d.primary},
         {"width", d.width},
