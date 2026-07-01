@@ -1,6 +1,7 @@
 #pragma once
 
 #include <wx/wx.h>
+#include <wx/timer.h>
 
 #include <functional>
 
@@ -46,10 +47,13 @@ public:
 private:
     void onPaint(wxPaintEvent&);
     void drawGlyph(wxGraphicsContext* gc, double cx, double top, const wxColour& colour);
+    void animateTo(double target);      // start easing hover_ toward target
 
     DisplayInfo info_;
     std::function<void()> onActivate_;
-    bool hover_ = false;
+    wxTimer anim_;
+    double hover_ = 0.0;                 // animated hover amount, 0..1
+    double hoverTarget_ = 0.0;
 };
 
 // ---- Chip ----------------------------------------------------------------

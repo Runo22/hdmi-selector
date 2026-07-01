@@ -4,6 +4,7 @@
 #include <wx/graphics.h>
 #include <wx/settings.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 
@@ -51,6 +52,17 @@ Theme makeDark() {
 ThemeMode g_mode = ThemeMode::System;
 Theme g_theme = makeLight();
 
+// Linear interpolation between two colours (t in 0..1).
+wxColour lerpColour(const wxColour& a, const wxColour& b, double t) {
+    auto mix = [&](unsigned char x, unsigned char y) {
+        return static_cast<unsigned char>(x + (static_cast<int>(y) - x) * t + 0.5);
+    };
+    return wxColour(mix(a.Red(), b.Red()), mix(a.Green(), b.Green()), mix(a.Blue(), b.Blue()));
+}
+
+// Smoothstep easing for a softer feel than a linear ramp.
+double ease(double t) { return t * t * (3.0 - 2.0 * t); }
+
 // Draw text horizontally centred on cx at vertical position y.
 void centeredText(wxGraphicsContext* gc, const wxString& s, const wxFont& font,
                   const wxColour& colour, double cx, double y) {
@@ -91,17 +103,32 @@ wxFont uiFont(int pointSize, wxFontWeight weight) {
 
 DisplayCard::DisplayCard(wxWindow* parent, const DisplayInfo& info,
                          std::function<void()> onActivate)
-    : wxWindow(parent, wxID_ANY, wxDefaultPosition, wxSize(170, 152)),
+    : wxWindow(parent, wxID_ANY, wxDefaultPosition, wxSize(172, 164)),
       info_(info),
-      onActivate_(std::move(onActivate)) {
+      onActivate_(std::move(onActivate)),
+      anim_(this) {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
     SetCursor(wxCursor(wxCURSOR_HAND));
-    SetMinSize(wxSize(170, 152));
+    SetMinSize(wxSize(172, 164));
 
     Bind(wxEVT_PAINT, &DisplayCard::onPaint, this);
-    Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent&) { hover_ = true; Refresh(); });
-    Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent&) { hover_ = false; Refresh(); });
+    Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent&) { animateTo(1.0); });
+    Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent&) { animateTo(0.0); });
     Bind(wxEVT_LEFT_UP, [this](wxMouseEvent&) { if (onActivate_) onActivate_(); });
+
+    // ~60 fps easing of the hover amount toward its target.
+    Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
+        const double step = 0.16;
+        if (hover_ < hoverTarget_) hover_ = std::min(hoverTarget_, hover_ + step);
+        else if (hover_ > hoverTarget_) hover_ = std::max(hoverTarget_, hover_ - step);
+        Refresh();
+        if (hover_ == hoverTarget_) anim_.Stop();
+    });
+}
+
+void DisplayCard::animateTo(double target) {
+    hoverTarget_ = target;
+    if (!anim_.IsRunning()) anim_.Start(16);
 }
 
 void DisplayCard::drawGlyph(wxGraphicsContext* gc, double cx, double top,
@@ -130,29 +157,35 @@ void DisplayCard::onPaint(wxPaintEvent&) {
     gc->SetAntialiasMode(wxANTIALIAS_DEFAULT);
 
     const wxSize sz = GetClientSize();
-    const double m = 4, r = 14;
-    const double w = sz.GetWidth() - 2 * m, h = sz.GetHeight() - 2 * m;
+    const double t = ease(hover_);       // eased hover amount
+    const double r = 14;
+    const double mx = 6;                 // side margin
+    const double top = 6 - 3.0 * t;      // card rises up to 3px on hover
+    const double w = sz.GetWidth() - 2 * mx;
+    const double h = sz.GetHeight() - 12 - 6;  // leave room below for shadow
     const double cx = sz.GetWidth() / 2.0;
     const bool active = info_.active;
 
-    // Soft drop shadow.
-    gc->SetBrush(wxBrush(wxColour(0, 0, 0, th.shadowAlpha)));
+    // Soft drop shadow that deepens as the card lifts.
+    const int shadowAlpha = th.shadowAlpha + static_cast<int>(22 * t);
+    const double shadowOff = 2 + 5.0 * t;
+    gc->SetBrush(wxBrush(wxColour(0, 0, 0, shadowAlpha)));
     gc->SetPen(*wxTRANSPARENT_PEN);
-    gc->DrawRoundedRectangle(m, m + 2, w, h, r);
+    gc->DrawRoundedRectangle(mx, top + shadowOff, w, h, r);
 
-    // Card body.
-    wxColour body = active ? th.accentSoft : (hover_ ? th.cardHover : th.cardBg);
+    // Card body: hover eases the fill and border toward the accent.
+    wxColour body = active ? th.accentSoft : lerpColour(th.cardBg, th.cardHover, t);
     gc->SetBrush(wxBrush(body));
-    wxColour border = active ? th.accent : (hover_ ? th.accent : th.cardBorder);
-    gc->SetPen(wxPen(border, active ? 2 : 1));
-    gc->DrawRoundedRectangle(m, m, w, h, r);
+    wxColour border = active ? th.accent : lerpColour(th.cardBorder, th.accent, t);
+    gc->SetPen(wxPen(border, active ? 2.0 : 1.0 + t));
+    gc->DrawRoundedRectangle(mx, top, w, h, r);
 
     // Monitor glyph.
-    drawGlyph(gc.get(), cx, m + 20, active ? th.accent : th.glyphInactive);
+    drawGlyph(gc.get(), cx, top + 16, active ? th.accent : th.glyphInactive);
 
     // Active check badge (top-right).
     if (active) {
-        const double bx = sz.GetWidth() - m - 18, by = m + 14, br = 9;
+        const double bx = sz.GetWidth() - mx - 18, by = top + 10, br = 9;
         gc->SetBrush(wxBrush(th.accent));
         gc->SetPen(*wxTRANSPARENT_PEN);
         gc->DrawEllipse(bx - br, by - br, br * 2, br * 2);
@@ -166,11 +199,11 @@ void DisplayCard::onPaint(wxPaintEvent&) {
 
     // Text block. Backend strings are UTF-8, so decode them explicitly.
     centeredText(gc.get(), wxString::FromUTF8(info_.name), uiFont(12, wxFONTWEIGHT_BOLD),
-                 th.textPrimary, cx, m + 74);
+                 th.textPrimary, cx, top + 74);
 
     if (!info_.connector.empty()) {
         centeredText(gc.get(), wxString::FromUTF8(info_.connector).Upper(), uiFont(8),
-                     th.textGray, cx, m + 96);
+                     th.textGray, cx, top + 96);
     }
 
     wxString sub;
@@ -182,7 +215,7 @@ void DisplayCard::onPaint(wxPaintEvent&) {
         sub = "Tap to activate";
     }
     if (!sub.empty()) {
-        centeredText(gc.get(), sub, uiFont(8), active ? th.accent : th.textGray, cx, m + 116);
+        centeredText(gc.get(), sub, uiFont(8), active ? th.accent : th.textGray, cx, top + 116);
     }
 }
 
