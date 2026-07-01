@@ -44,6 +44,11 @@ private:
     void rebuildCards();                 // re-query displays and redraw the row
     void refreshIfChanged();             // timer tick: rebuild only on change
     void applyTheme();                   // push current theme colours into widgets
+    void openOptionsFor(const std::string& id);   // open/refresh the side drawer
+    void configureDrawer(const std::string& id);  // (re)populate drawer for a display
+    // `id` is taken by value on purpose: applying a mode rebuilds the drawer,
+    // which replaces the very callback that invoked this, freeing a captured id.
+    void changeMode(std::string id, int w, int h, int hz);  // apply + verify
     static std::string signatureOf(const std::vector<DisplayInfo>& displays);
     void showError(const wxString& message);
 
@@ -56,6 +61,8 @@ private:
     wxStaticText* title_ = nullptr;      // header widgets, recoloured on theme change
     wxStaticText* subtitle_ = nullptr;
     wxStaticText* statusText_ = nullptr; // footer REST status
+    ui::OptionsPanel* drawer_ = nullptr; // collapsible resolution/refresh panel
+    std::string drawerId_;               // display the drawer is showing (if any)
 
     wxTimer pollTimer_;
     std::string lastSignature_;          // detects display-config changes

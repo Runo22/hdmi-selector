@@ -21,9 +21,11 @@ Windows drives.
   remembered; `HDMI_THEME=system|light|dark` overrides it for one run.
 * **Resolution & refresh rate:** each active card shows its current resolution
   and refresh (e.g. `1920 × 1080 · 144 Hz`). Click the **•••** on a card (or
-  right-click it) to pick a resolution — common ones are labelled **1080p / 2K /
-  4K** — or **Set max refresh rate**. Only modes the display actually supports
-  are offered (validated with `CDS_TEST`). The chosen mode is **saved per
+  right-click it) to slide out a side panel with **Resolution** (common ones
+  labelled **1080p / 2K / 4K**) and **Refresh rate** chips. Both lists are
+  populated from the modes the display actually supports; the refresh list
+  updates to the rates available at the chosen resolution. Changes are validated
+  (`CDS_TEST`) and **verified after applying**. The chosen mode is **saved per
   monitor** (by its stable id) and re-applied on the next launch; monitors with
   no saved selection keep their current mode.
 * **LAN REST API:** the same actions are exposed over HTTP so you can switch

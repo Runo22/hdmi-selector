@@ -84,6 +84,22 @@ bool DisplayManager::setMode(const std::string& id, int width, int height, int h
         return false;
     }
     if (!backend_->setMode(id, width, height, hz, error)) return false;
+
+    // Verify the change actually took effect (some drivers silently ignore).
+    for (const auto& d : backend_->list()) {
+        if (d.id != id) continue;
+        const bool resOk = (d.width == width && d.height == height);
+        const bool hzOk = (hz <= 0) || (d.refreshHz == hz);
+        if (!resOk || !hzOk) {
+            if (error) {
+                *error = "mode was not applied (display is at " + std::to_string(d.width) +
+                         "x" + std::to_string(d.height) + "@" + std::to_string(d.refreshHz) +
+                         ")";
+            }
+            return false;
+        }
+        break;
+    }
     persistCurrentLocked(id);
     return true;
 }

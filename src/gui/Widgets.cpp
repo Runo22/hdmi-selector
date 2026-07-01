@@ -3,10 +3,13 @@
 #include <wx/dcbuffer.h>
 #include <wx/graphics.h>
 #include <wx/settings.h>
+#include <wx/wrapsizer.h>
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace hdmi::ui {
 
@@ -116,14 +119,11 @@ wxString resolutionLabel(int width, int height) {
 // ---------------------------------------------------------------------------
 
 DisplayCard::DisplayCard(wxWindow* parent, const DisplayInfo& info,
-                         std::function<void()> onActivate,
-                         std::function<void(int, int, int)> onSetMode,
-                         std::function<void()> onMaxHz)
+                         std::function<void()> onActivate, std::function<void()> onOptions)
     : wxWindow(parent, wxID_ANY, wxDefaultPosition, wxSize(172, 164)),
       info_(info),
       onActivate_(std::move(onActivate)),
-      onSetMode_(std::move(onSetMode)),
-      onMaxHz_(std::move(onMaxHz)),
+      onOptions_(std::move(onOptions)),
       anim_(this) {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
     SetCursor(wxCursor(wxCURSOR_HAND));
@@ -133,9 +133,9 @@ DisplayCard::DisplayCard(wxWindow* parent, const DisplayInfo& info,
     Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent&) { animateTo(1.0); });
     Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent&) { animateTo(0.0); });
     Bind(wxEVT_LEFT_UP, &DisplayCard::onLeftUp, this);
-    // Right-click anywhere on an active card opens the options menu.
-    Bind(wxEVT_RIGHT_UP, [this](wxMouseEvent& e) {
-        if (info_.active) showOptions(e.GetPosition());
+    // Right-click anywhere on an active card opens the options panel.
+    Bind(wxEVT_RIGHT_UP, [this](wxMouseEvent&) {
+        if (info_.active && onOptions_) onOptions_();
     });
 
     // ~60 fps easing of the hover amount toward its target.
@@ -155,65 +155,17 @@ void DisplayCard::animateTo(double target) {
 
 wxRect DisplayCard::optionsHotspot() const {
     const wxSize sz = GetClientSize();
-    return wxRect(sz.GetWidth() - 42, sz.GetHeight() - 36, 34, 26);
+    return wxRect(sz.GetWidth() - 40, 2, 34, 34);  // top-right corner
 }
 
 void DisplayCard::onLeftUp(wxMouseEvent& e) {
-    // On an active card, the bottom-right "•••" opens options; elsewhere (and
-    // on inactive cards) a click switches to this display.
+    // On an active card, the top-right "•••" opens the options panel; elsewhere
+    // (and on inactive cards) a click switches to this display.
     if (info_.active && optionsHotspot().Contains(e.GetPosition())) {
-        showOptions(e.GetPosition());
+        if (onOptions_) onOptions_();
         return;
     }
     if (onActivate_) onActivate_();
-}
-
-void DisplayCard::showOptions(const wxPoint& pos) {
-    // Unique resolutions (highest refresh each), largest first.
-    std::vector<DisplayMode> res;
-    for (const auto& m : info_.modes) {
-        auto it = std::find_if(res.begin(), res.end(), [&](const DisplayMode& r) {
-            return r.width == m.width && r.height == m.height;
-        });
-        if (it == res.end()) res.push_back({m.width, m.height, m.hz});
-        else it->hz = std::max(it->hz, m.hz);
-    }
-    std::sort(res.begin(), res.end(), [](const DisplayMode& a, const DisplayMode& b) {
-        return static_cast<long>(a.width) * a.height > static_cast<long>(b.width) * b.height;
-    });
-
-    // Highest refresh available at the current resolution.
-    int maxHzHere = 0;
-    for (const auto& m : info_.modes) {
-        if (m.width == info_.width && m.height == info_.height) {
-            maxHzHere = std::max(maxHzHere, m.hz);
-        }
-    }
-
-    wxMenu menu;
-    const int kResBase = 1000, kMaxHz = 2000;
-    for (size_t i = 0; i < res.size(); ++i) {
-        const auto& r = res[i];
-        // Build with FromUTF8 (× is non-ASCII and unsafe in a Format string).
-        wxString dims = wxString::FromUTF8(std::to_string(r.width) + "\xC3\x97" +
-                                           std::to_string(r.height));
-        wxString label = resolutionLabel(r.width, r.height) + "   (" + dims + ")";
-        auto* item = menu.AppendRadioItem(kResBase + static_cast<int>(i), label);
-        if (r.width == info_.width && r.height == info_.height) item->Check(true);
-    }
-    if (maxHzHere > 0) {
-        menu.AppendSeparator();
-        menu.Append(kMaxHz, wxString::Format("Set max refresh rate (%d Hz)", maxHzHere));
-    }
-
-    const int sel = GetPopupMenuSelectionFromUser(menu, pos);
-    if (sel == wxID_NONE) return;
-    if (sel == kMaxHz) {
-        if (onMaxHz_) onMaxHz_();
-    } else if (sel >= kResBase && sel < kMaxHz) {
-        const auto& r = res[static_cast<size_t>(sel - kResBase)];
-        if (onSetMode_) onSetMode_(r.width, r.height, 0);  // 0 => best refresh
-    }
 }
 
 void DisplayCard::drawGlyph(wxGraphicsContext* gc, double cx, double top,
@@ -234,7 +186,8 @@ void DisplayCard::drawGlyph(wxGraphicsContext* gc, double cx, double top,
 void DisplayCard::onPaint(wxPaintEvent&) {
     const Theme& th = theme();
     wxAutoBufferedPaintDC dc(this);
-    dc.SetBackground(wxBrush(th.windowBg));
+    wxColour pbg = GetParent() ? GetParent()->GetBackgroundColour() : th.windowBg;
+    dc.SetBackground(wxBrush(pbg));
     dc.Clear();
 
     std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
@@ -268,9 +221,9 @@ void DisplayCard::onPaint(wxPaintEvent&) {
     // Monitor glyph.
     drawGlyph(gc.get(), cx, top + 16, active ? th.accent : th.glyphInactive);
 
-    // Active check badge (top-right).
+    // Active check badge (top-left, clear of the centred text and the ••• menu).
     if (active) {
-        const double bx = sz.GetWidth() - mx - 18, by = top + 10, br = 9;
+        const double bx = mx + 16, by = top + 14, br = 9;
         gc->SetBrush(wxBrush(th.accent));
         gc->SetPen(*wxTRANSPARENT_PEN);
         gc->DrawEllipse(bx - br, by - br, br * 2, br * 2);
@@ -304,10 +257,9 @@ void DisplayCard::onPaint(wxPaintEvent&) {
         centeredText(gc.get(), sub, uiFont(8), active ? th.accent : th.textGray, cx, top + 116);
     }
 
-    // Options affordance ("•••") bottom-right on active cards, following the
-    // card's lifted position.
+    // Options affordance ("•••") top-right on active cards.
     if (active) {
-        const double dotY = top + h - 16;
+        const double dotY = top + 14;
         const double dotCx = sz.GetWidth() - mx - 16;
         gc->SetBrush(wxBrush(th.textGray));
         gc->SetPen(*wxTRANSPARENT_PEN);
@@ -344,7 +296,9 @@ Chip::Chip(wxWindow* parent, const wxString& label, std::function<void()> onClic
 void Chip::onPaint(wxPaintEvent&) {
     const Theme& t = theme();
     wxAutoBufferedPaintDC dc(this);
-    dc.SetBackground(wxBrush(t.windowBg));
+    // Clear with the parent's background so the chip blends on any surface.
+    wxColour pbg = GetParent() ? GetParent()->GetBackgroundColour() : t.windowBg;
+    dc.SetBackground(wxBrush(pbg));
     dc.Clear();
 
     std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
@@ -373,6 +327,160 @@ void Chip::onPaint(wxPaintEvent&) {
     double tw = 0, th = 0, d = 0, e = 0;
     gc->GetTextExtent(label_, &tw, &th, &d, &e);
     gc->DrawText(label_, (sz.GetWidth() - tw) / 2.0, (sz.GetHeight() - th) / 2.0);
+}
+
+// ---------------------------------------------------------------------------
+// OptionsPanel (collapsible side drawer)
+// ---------------------------------------------------------------------------
+
+namespace {
+// Unique resolutions in `modes`, largest first.
+std::vector<DisplayMode> uniqueResolutions(const std::vector<DisplayMode>& modes) {
+    std::vector<DisplayMode> res;
+    for (const auto& m : modes) {
+        auto it = std::find_if(res.begin(), res.end(), [&](const DisplayMode& r) {
+            return r.width == m.width && r.height == m.height;
+        });
+        if (it == res.end()) res.push_back({m.width, m.height, m.hz});
+        else it->hz = std::max(it->hz, m.hz);
+    }
+    std::sort(res.begin(), res.end(), [](const DisplayMode& a, const DisplayMode& b) {
+        return static_cast<long>(a.width) * a.height > static_cast<long>(b.width) * b.height;
+    });
+    return res;
+}
+
+// Distinct refresh rates available at a given resolution, ascending.
+std::vector<int> refreshRatesAt(const std::vector<DisplayMode>& modes, int w, int h) {
+    std::vector<int> hz;
+    for (const auto& m : modes) {
+        if (m.width == w && m.height == h &&
+            std::find(hz.begin(), hz.end(), m.hz) == hz.end()) {
+            hz.push_back(m.hz);
+        }
+    }
+    std::sort(hz.begin(), hz.end());
+    return hz;
+}
+}  // namespace
+
+OptionsPanel::OptionsPanel(wxWindow* parent)
+    : wxPanel(parent, wxID_ANY), anim_(this) {
+    content_ = new wxPanel(this, wxID_ANY);
+    contentSizer_ = new wxBoxSizer(wxVERTICAL);
+    content_->SetSizer(contentSizer_);
+    SetMinSize(wxSize(0, -1));
+    Hide();
+
+    Bind(wxEVT_SIZE, [this](wxSizeEvent& e) { relayout(); e.Skip(); });
+    Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
+        width_ += (targetWidth_ - width_) * 0.35;
+        if (std::abs(targetWidth_ - width_) < 1.0) {
+            width_ = targetWidth_;
+            anim_.Stop();
+            if (targetWidth_ == 0.0) Hide();
+        }
+        SetMinSize(wxSize(static_cast<int>(width_), -1));
+        if (GetParent()) GetParent()->Layout();
+        relayout();
+    });
+}
+
+void OptionsPanel::relayout() {
+    if (!content_) return;
+    const wxSize sz = GetClientSize();
+    // Pin the fixed-width content to the right edge so it slides in/out.
+    content_->SetSize(kFullWidth, sz.GetHeight());
+    content_->Move(sz.GetWidth() - kFullWidth, 0);
+}
+
+void OptionsPanel::configure(const DisplayInfo& info,
+                             std::function<void(int, int, int)> onSetMode,
+                             std::function<void()> onClose) {
+    info_ = info;
+    onSetMode_ = std::move(onSetMode);
+    onClose_ = std::move(onClose);
+    rebuild();
+}
+
+void OptionsPanel::open() {
+    Show(true);
+    targetWidth_ = kFullWidth;
+    if (!anim_.IsRunning()) anim_.Start(16);
+}
+
+void OptionsPanel::close() {
+    targetWidth_ = 0.0;
+    if (!anim_.IsRunning()) anim_.Start(16);
+}
+
+void OptionsPanel::applyTheme() {
+    SetBackgroundColour(theme().windowBg);
+    if (content_) content_->SetBackgroundColour(theme().cardBg);
+    rebuild();
+}
+
+void OptionsPanel::rebuild() {
+    if (!content_) return;
+    contentSizer_->Clear(/*delete_windows=*/true);
+
+    const Theme& th = theme();
+    auto addLabel = [&](const wxString& text, int pt, wxFontWeight w, const wxColour& c) {
+        auto* t = new wxStaticText(content_, wxID_ANY, text);
+        t->SetFont(uiFont(pt, w));
+        t->SetForegroundColour(c);
+        return t;
+    };
+
+    contentSizer_->AddSpacer(16);
+
+    // Header: display name + a Close chip.
+    auto* head = new wxBoxSizer(wxHORIZONTAL);
+    head->Add(addLabel(wxString::FromUTF8(info_.name), 12, wxFONTWEIGHT_BOLD, th.textPrimary), 1,
+              wxALIGN_CENTER_VERTICAL);
+    head->Add(new Chip(content_, "Close", [this] { if (onClose_) onClose_(); }), 0,
+              wxALIGN_CENTER_VERTICAL);
+    contentSizer_->Add(head, 0, wxEXPAND | wxLEFT | wxRIGHT, 16);
+
+    if (!info_.connector.empty()) {
+        contentSizer_->Add(
+            addLabel(wxString::FromUTF8(info_.connector).Upper(), 8, wxFONTWEIGHT_NORMAL,
+                     th.textGray),
+            0, wxLEFT | wxRIGHT | wxTOP, 16);
+    }
+
+    // Resolution section.
+    contentSizer_->AddSpacer(14);
+    contentSizer_->Add(addLabel("RESOLUTION", 8, wxFONTWEIGHT_BOLD, th.textGray), 0,
+                       wxLEFT | wxRIGHT, 16);
+    contentSizer_->AddSpacer(6);
+    auto* resWrap = new wxWrapSizer(wxHORIZONTAL);
+    for (const auto& r : uniqueResolutions(info_.modes)) {
+        const bool sel = (r.width == info_.width && r.height == info_.height);
+        const int w = r.width, h = r.height;
+        auto* chip = new Chip(content_, resolutionLabel(w, h),
+                              [this, w, h] { if (onSetMode_) onSetMode_(w, h, 0); }, sel);
+        resWrap->Add(chip, 0, wxALL, 3);
+    }
+    contentSizer_->Add(resWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, 13);
+
+    // Refresh-rate section (rates available at the current resolution).
+    contentSizer_->AddSpacer(14);
+    contentSizer_->Add(addLabel("REFRESH RATE", 8, wxFONTWEIGHT_BOLD, th.textGray), 0,
+                       wxLEFT | wxRIGHT, 16);
+    contentSizer_->AddSpacer(6);
+    auto* hzWrap = new wxWrapSizer(wxHORIZONTAL);
+    for (int hz : refreshRatesAt(info_.modes, info_.width, info_.height)) {
+        const bool sel = (hz == info_.refreshHz);
+        const int w = info_.width, h = info_.height;
+        auto* chip = new Chip(content_, wxString::Format("%d Hz", hz),
+                              [this, w, h, hz] { if (onSetMode_) onSetMode_(w, h, hz); }, sel);
+        hzWrap->Add(chip, 0, wxALL, 3);
+    }
+    contentSizer_->Add(hzWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, 13);
+
+    contentSizer_->AddStretchSpacer();
+    content_->Layout();
 }
 
 }  // namespace hdmi::ui

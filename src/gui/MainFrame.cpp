@@ -48,7 +48,7 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
     SetIcon(wxICON(appicon));
     buildMenu();
 
-    auto* root = new wxBoxSizer(wxVERTICAL);
+    auto* leftCol = new wxBoxSizer(wxVERTICAL);
 
     // ---- Header: title + subtitle on the left, inline action chips right ----
     auto* header = new wxBoxSizer(wxHORIZONTAL);
@@ -71,20 +71,26 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
     header->Add(new Chip(this, "Refresh", [this] { rebuildCards(); }), 0,
                 wxALIGN_CENTER_VERTICAL);
 
-    root->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 18);
+    leftCol->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 18);
 
     // ---- Card row (cards are centred within this panel) ----
     cardRow_ = new wxPanel(this, wxID_ANY);
     cardSizer_ = new wxBoxSizer(wxHORIZONTAL);
     cardRow_->SetSizer(cardSizer_);
-    root->Add(cardRow_, 1, wxEXPAND | wxLEFT | wxRIGHT, 14);
+    leftCol->Add(cardRow_, 1, wxEXPAND | wxLEFT | wxRIGHT, 14);
 
     // ---- Footer: subtle REST status with a live dot ----
     statusText_ = new wxStaticText(this, wxID_ANY, "");
     statusText_->SetFont(uiFont(8));
-    root->Add(statusText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM | wxTOP, 16);
+    leftCol->Add(statusText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM | wxTOP, 16);
 
-    SetSizer(root);
+    // Collapsible options drawer on the right; hidden until a card's ••• is used.
+    drawer_ = new ui::OptionsPanel(this);
+
+    auto* outer = new wxBoxSizer(wxHORIZONTAL);
+    outer->Add(leftCol, 1, wxEXPAND);
+    outer->Add(drawer_, 0, wxEXPAND);
+    SetSizer(outer);
 
     // Re-follow the OS when it flips light/dark, if we're in System mode.
     Bind(wxEVT_SYS_COLOUR_CHANGED, [this](wxSysColourChangedEvent& e) {
@@ -208,6 +214,7 @@ void MainFrame::applyTheme() {
     if (title_) title_->SetForegroundColour(th.textPrimary);
     if (subtitle_) subtitle_->SetForegroundColour(th.textGray);
     if (statusText_) statusText_->SetForegroundColour(th.textGray);
+    if (drawer_) drawer_->applyTheme();
     refreshTree(this);
 }
 
@@ -264,26 +271,22 @@ void MainFrame::rebuildCards() {
         empty->SetForegroundColour(theme().textGray);
         cardSizer_->Add(empty, 0, wxALIGN_CENTER_VERTICAL | wxALL, 12);
     }
+    bool drawerDisplayActive = false;
     for (const auto& d : displays) {
         const std::string id = d.id;
-        auto* card = new DisplayCard(
-            cardRow_, d,
-            [this, id] { switchExclusive(id); },
-            [this, id](int w, int h, int hz) {
-                std::string err;
-                if (!manager_.setMode(id, w, h, hz, &err))
-                    showError(wxString::Format("Could not set mode: %s", err));
-                rebuildCards();
-            },
-            [this, id] {
-                std::string err;
-                if (!manager_.setMaxRefresh(id, &err))
-                    showError(wxString::Format("Could not set refresh rate: %s", err));
-                rebuildCards();
-            });
+        auto* card = new DisplayCard(cardRow_, d, [this, id] { switchExclusive(id); },
+                                     [this, id] { openOptionsFor(id); });
         cardSizer_->Add(card, 0, wxALIGN_CENTER_VERTICAL | wxALL, 8);
+        if (id == drawerId_ && d.active) drawerDisplayActive = true;
     }
     cardSizer_->AddStretchSpacer();
+
+    // Keep the drawer in sync: refresh its contents, or close it if its display
+    // is gone/inactive.
+    if (drawer_ && drawer_->isOpen() && !drawerId_.empty()) {
+        if (drawerDisplayActive) configureDrawer(drawerId_);
+        else { drawer_->close(); drawerId_.clear(); }
+    }
 
     cardRow_->Layout();
     Layout();
@@ -313,6 +316,38 @@ void MainFrame::applyTopology(Topology topology) {
         showError(wxString::Format("Could not apply %s: %s", topologyToString(topology), err));
     }
     rebuildCards();
+}
+
+void MainFrame::configureDrawer(const std::string& id) {
+    // Find the fresh DisplayInfo for `id`.
+    DisplayInfo info;
+    bool found = false;
+    for (const auto& d : manager_.displays()) {
+        if (d.id == id) { info = d; found = true; break; }
+    }
+    if (!found) { drawer_->close(); drawerId_.clear(); return; }
+
+    drawer_->configure(
+        info,
+        [this, id](int w, int h, int hz) { changeMode(id, w, h, hz); },
+        [this] { drawer_->close(); drawerId_.clear(); });
+}
+
+void MainFrame::openOptionsFor(const std::string& id) {
+    drawerId_ = id;
+    configureDrawer(id);
+    drawer_->open();
+}
+
+void MainFrame::changeMode(std::string id, int w, int h, int hz) {
+    std::string err;
+    if (!manager_.setMode(id, w, h, hz, &err)) {
+        showError(wxString::Format("Could not apply mode: %s", err));
+    }
+    // Rebuild after the current event finishes: this callback runs from a chip
+    // inside the drawer, and rebuildCards() re-populates (deletes) that chip.
+    // setMode already verified the change actually took effect.
+    CallAfter([this] { rebuildCards(); });
 }
 
 void MainFrame::showError(const wxString& message) {

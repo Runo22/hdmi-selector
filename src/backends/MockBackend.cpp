@@ -27,7 +27,7 @@ DisplayInfo makeDisplay(std::string id, std::string name, std::string connector,
 MockBackend::MockBackend() {
     displays_.push_back(makeDisplay(
         "monitor", "PC Monitor", "DisplayPort", /*active=*/true, /*primary=*/true,
-        {{1920, 1080, 144}, {1920, 1080, 120}, {1920, 1080, 60},
+        {{1920, 1080, 144}, {1920, 1080, 120}, {1920, 1080, 90}, {1920, 1080, 60},
          {2560, 1440, 120}, {2560, 1440, 60}, {3840, 2160, 60}}));
     displays_.push_back(makeDisplay(
         "tv", "Living Room TV", "HDMI", /*active=*/false, /*primary=*/false,

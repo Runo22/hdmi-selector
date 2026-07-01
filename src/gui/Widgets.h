@@ -43,10 +43,10 @@ wxFont uiFont(int pointSize, wxFontWeight weight = wxFONTWEIGHT_NORMAL);
 class DisplayCard : public wxWindow {
 public:
     // onActivate: exclusive-switch to this display.
-    // onSetMode(w,h,hz): change resolution/refresh (hz<=0 => max at that size).
-    // onMaxHz: raise to the highest refresh at the current resolution.
+    // onOptions: open the resolution/refresh side panel for this display
+    //            (only reachable on an active card).
     DisplayCard(wxWindow* parent, const DisplayInfo& info, std::function<void()> onActivate,
-                std::function<void(int, int, int)> onSetMode, std::function<void()> onMaxHz);
+                std::function<void()> onOptions);
 
 private:
     void onPaint(wxPaintEvent&);
@@ -54,12 +54,10 @@ private:
     void drawGlyph(wxGraphicsContext* gc, double cx, double top, const wxColour& colour);
     void animateTo(double target);      // start easing hover_ toward target
     wxRect optionsHotspot() const;      // clickable "options" region (active only)
-    void showOptions(const wxPoint& pos);
 
     DisplayInfo info_;
     std::function<void()> onActivate_;
-    std::function<void(int, int, int)> onSetMode_;
-    std::function<void()> onMaxHz_;
+    std::function<void()> onOptions_;
     wxTimer anim_;
     double hover_ = 0.0;                 // animated hover amount, 0..1
     double hoverTarget_ = 0.0;
@@ -67,6 +65,36 @@ private:
 
 // Friendly label for common resolutions: "1080p", "2K", "4K", ... else WxH.
 wxString resolutionLabel(int width, int height);
+
+// A themed, collapsible side panel that slides in from the right and lets the
+// user pick a resolution and refresh rate from the display's supported modes.
+class OptionsPanel : public wxPanel {
+public:
+    explicit OptionsPanel(wxWindow* parent);
+
+    // Populate for a display. onSetMode(w,h,hz): hz>0 exact, 0 = best at size.
+    void configure(const DisplayInfo& info, std::function<void(int, int, int)> onSetMode,
+                   std::function<void()> onClose);
+    void open();       // animate into view
+    void close();      // animate out, then hide
+    bool isOpen() const { return targetWidth_ > 0; }
+    void applyTheme();
+
+    static constexpr int kFullWidth = 236;
+
+private:
+    void rebuild();
+    void relayout();
+
+    wxPanel* content_ = nullptr;
+    wxBoxSizer* contentSizer_ = nullptr;
+    DisplayInfo info_;
+    std::function<void(int, int, int)> onSetMode_;
+    std::function<void()> onClose_;
+    wxTimer anim_;
+    double width_ = 0.0;
+    double targetWidth_ = 0.0;
+};
 
 // ---- Chip ----------------------------------------------------------------
 // A small, flat, rounded action button used for secondary/inline actions
