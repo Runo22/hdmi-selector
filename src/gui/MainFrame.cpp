@@ -1,5 +1,6 @@
 #include "MainFrame.h"
 
+#include <wx/config.h>
 #include <wx/menu.h>
 
 #include <string>
@@ -19,6 +20,9 @@ enum {
     ID_ExtendBoth,
     ID_DuplicateBoth,
     ID_ToggleAutostart,
+    ID_ThemeSystem,
+    ID_ThemeLight,
+    ID_ThemeDark,
 
     // Tray menu ids.
     ID_TrayOpen,
@@ -42,7 +46,6 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
       restConfig_(restConfig),
       pollTimer_(this) {
     SetIcon(wxICON(appicon));
-    SetBackgroundColour(kWindowBg);
     buildMenu();
 
     auto* root = new wxBoxSizer(wxVERTICAL);
@@ -51,14 +54,12 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
     auto* header = new wxBoxSizer(wxHORIZONTAL);
 
     auto* titles = new wxBoxSizer(wxVERTICAL);
-    auto* title = new wxStaticText(this, wxID_ANY, "Displays");
-    title->SetFont(uiFont(16, wxFONTWEIGHT_BOLD));
-    title->SetForegroundColour(kTextDark);
-    auto* subtitle = new wxStaticText(this, wxID_ANY, "Choose the screen you want to use");
-    subtitle->SetFont(uiFont(9));
-    subtitle->SetForegroundColour(kTextGray);
-    titles->Add(title);
-    titles->Add(subtitle, 0, wxTOP, 2);
+    title_ = new wxStaticText(this, wxID_ANY, "Displays");
+    title_->SetFont(uiFont(16, wxFONTWEIGHT_BOLD));
+    subtitle_ = new wxStaticText(this, wxID_ANY, "Choose the screen you want to use");
+    subtitle_->SetFont(uiFont(9));
+    titles->Add(title_);
+    titles->Add(subtitle_, 0, wxTOP, 2);
 
     header->Add(titles, 1, wxALIGN_CENTER_VERTICAL);
     header->AddStretchSpacer();
@@ -72,9 +73,8 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
 
     root->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 18);
 
-    // ---- Card row ----
+    // ---- Card row (cards are centred within this panel) ----
     cardRow_ = new wxPanel(this, wxID_ANY);
-    cardRow_->SetBackgroundColour(kWindowBg);
     cardSizer_ = new wxBoxSizer(wxHORIZONTAL);
     cardRow_->SetSizer(cardSizer_);
     root->Add(cardRow_, 1, wxEXPAND | wxLEFT | wxRIGHT, 14);
@@ -82,10 +82,18 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
     // ---- Footer: subtle REST status with a live dot ----
     statusText_ = new wxStaticText(this, wxID_ANY, "");
     statusText_->SetFont(uiFont(8));
-    statusText_->SetForegroundColour(kTextGray);
     root->Add(statusText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM | wxTOP, 16);
 
     SetSizer(root);
+
+    // Re-follow the OS when it flips light/dark, if we're in System mode.
+    Bind(wxEVT_SYS_COLOUR_CHANGED, [this](wxSysColourChangedEvent& e) {
+        if (ui::themeMode() == ui::ThemeMode::System) {
+            ui::setThemeMode(ui::ThemeMode::System);
+            applyTheme();
+        }
+        e.Skip();
+    });
 
     // Start the REST server alongside the GUI so the app can be driven over LAN.
     // Note: build UTF-8 text explicitly (FromUTF8). Passing non-ASCII directly
@@ -120,6 +128,7 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
         }
     });
 
+    applyTheme();
     rebuildCards();
 }
 
@@ -154,6 +163,20 @@ void MainFrame::buildMenu() {
                      "Mirror the same image on every connected display");
     menuBar->Append(advanced, "&Advanced");
 
+    // View > Theme (System / Light / Dark), reflecting the current selection.
+    auto* view = new wxMenu();
+    auto* themeMenu = new wxMenu();
+    themeMenu->AppendRadioItem(ID_ThemeSystem, "&System", "Follow the OS light/dark setting");
+    themeMenu->AppendRadioItem(ID_ThemeLight, "&Light");
+    themeMenu->AppendRadioItem(ID_ThemeDark, "&Dark");
+    switch (ui::themeMode()) {
+        case ui::ThemeMode::System: themeMenu->Check(ID_ThemeSystem, true); break;
+        case ui::ThemeMode::Light: themeMenu->Check(ID_ThemeLight, true); break;
+        case ui::ThemeMode::Dark: themeMenu->Check(ID_ThemeDark, true); break;
+    }
+    view->AppendSubMenu(themeMenu, "&Theme");
+    menuBar->Append(view, "&View");
+
     SetMenuBar(menuBar);
 
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { rebuildCards(); }, ID_Refresh);
@@ -164,6 +187,35 @@ void MainFrame::buildMenu() {
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { applyTopology(Topology::Duplicate); },
          ID_DuplicateBoth);
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { toggleAutostart(); }, ID_ToggleAutostart);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { setTheme(ui::ThemeMode::System); },
+         ID_ThemeSystem);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { setTheme(ui::ThemeMode::Light); }, ID_ThemeLight);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { setTheme(ui::ThemeMode::Dark); }, ID_ThemeDark);
+}
+
+namespace {
+// Recursively repaint a window and all of its descendants.
+void refreshTree(wxWindow* w) {
+    w->Refresh();
+    for (wxWindow* child : w->GetChildren()) refreshTree(child);
+}
+}  // namespace
+
+void MainFrame::applyTheme() {
+    const Theme& th = theme();
+    SetBackgroundColour(th.windowBg);
+    if (cardRow_) cardRow_->SetBackgroundColour(th.windowBg);
+    if (title_) title_->SetForegroundColour(th.textPrimary);
+    if (subtitle_) subtitle_->SetForegroundColour(th.textGray);
+    if (statusText_) statusText_->SetForegroundColour(th.textGray);
+    refreshTree(this);
+}
+
+void MainFrame::setTheme(ui::ThemeMode mode) {
+    ui::setThemeMode(mode);
+    wxConfig config("HdmiSelector");
+    config.Write("ThemeMode", static_cast<int>(mode));
+    applyTheme();
 }
 
 void MainFrame::toggleAutostart() {
@@ -203,19 +255,22 @@ void MainFrame::rebuildCards() {
     const auto displays = manager_.displays();
     lastSignature_ = signatureOf(displays);
 
+    // Leading + trailing stretch spacers centre the content horizontally; the
+    // per-item ALIGN_CENTER_VERTICAL centres it in the row's height.
+    cardSizer_->AddStretchSpacer();
     if (displays.empty()) {
         auto* empty = new wxStaticText(cardRow_, wxID_ANY, "No displays detected");
         empty->SetFont(uiFont(10));
-        empty->SetForegroundColour(kTextGray);
-        cardSizer_->Add(empty, 0, wxALL, 12);
+        empty->SetForegroundColour(theme().textGray);
+        cardSizer_->Add(empty, 0, wxALIGN_CENTER_VERTICAL | wxALL, 12);
     }
-
-    cardSizer_->AddSpacer(4);
     for (const auto& d : displays) {
         const std::string id = d.id;
         auto* card = new DisplayCard(cardRow_, d, [this, id] { switchExclusive(id); });
-        cardSizer_->Add(card, 0, wxALL, 8);
+        cardSizer_->Add(card, 0, wxALIGN_CENTER_VERTICAL | wxALL, 8);
     }
+    cardSizer_->AddStretchSpacer();
+
     cardRow_->Layout();
     Layout();
 }

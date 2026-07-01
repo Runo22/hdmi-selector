@@ -2,6 +2,7 @@
 
 #include <wx/dcbuffer.h>
 #include <wx/graphics.h>
+#include <wx/settings.h>
 
 #include <memory>
 #include <string>
@@ -9,6 +10,47 @@
 namespace hdmi::ui {
 
 namespace {
+
+// --- Palettes -------------------------------------------------------------
+Theme makeLight() {
+    Theme t;
+    t.dark = false;
+    t.windowBg = wxColour(245, 246, 248);
+    t.cardBg = wxColour(255, 255, 255);
+    t.cardHover = wxColour(250, 251, 252);
+    t.cardBorder = wxColour(228, 230, 234);
+    t.accent = wxColour(31, 168, 93);
+    t.accentHover = wxColour(27, 150, 83);
+    t.accentSoft = wxColour(233, 248, 239);
+    t.textPrimary = wxColour(26, 28, 32);
+    t.textGray = wxColour(139, 145, 154);
+    t.badgeText = wxColour(255, 255, 255);
+    t.glyphInactive = wxColour(176, 182, 190);
+    t.shadowAlpha = 12;
+    return t;
+}
+
+Theme makeDark() {
+    Theme t;
+    t.dark = true;
+    t.windowBg = wxColour(30, 31, 34);
+    t.cardBg = wxColour(43, 45, 49);
+    t.cardHover = wxColour(50, 52, 57);
+    t.cardBorder = wxColour(58, 61, 66);
+    t.accent = wxColour(46, 190, 110);
+    t.accentHover = wxColour(58, 205, 123);
+    t.accentSoft = wxColour(30, 58, 42);
+    t.textPrimary = wxColour(236, 237, 238);
+    t.textGray = wxColour(154, 160, 166);
+    t.badgeText = wxColour(255, 255, 255);
+    t.glyphInactive = wxColour(107, 112, 120);
+    t.shadowAlpha = 40;
+    return t;
+}
+
+ThemeMode g_mode = ThemeMode::System;
+Theme g_theme = makeLight();
+
 // Draw text horizontally centred on cx at vertical position y.
 void centeredText(wxGraphicsContext* gc, const wxString& s, const wxFont& font,
                   const wxColour& colour, double cx, double y) {
@@ -18,6 +60,21 @@ void centeredText(wxGraphicsContext* gc, const wxString& s, const wxFont& font,
     gc->DrawText(s, cx - tw / 2.0, y);
 }
 }  // namespace
+
+bool systemIsDark() {
+    return wxSystemSettings::GetAppearance().IsDark();
+}
+
+void setThemeMode(ThemeMode mode) {
+    g_mode = mode;
+    const bool dark = (mode == ThemeMode::Dark) ||
+                      (mode == ThemeMode::System && systemIsDark());
+    g_theme = dark ? makeDark() : makeLight();
+}
+
+ThemeMode themeMode() { return g_mode; }
+
+const Theme& theme() { return g_theme; }
 
 wxFont uiFont(int pointSize, wxFontWeight weight) {
     // FaceName is honoured where present (Segoe UI on Windows); otherwise
@@ -63,8 +120,9 @@ void DisplayCard::drawGlyph(wxGraphicsContext* gc, double cx, double top,
 }
 
 void DisplayCard::onPaint(wxPaintEvent&) {
+    const Theme& th = theme();
     wxAutoBufferedPaintDC dc(this);
-    dc.SetBackground(wxBrush(kWindowBg));
+    dc.SetBackground(wxBrush(th.windowBg));
     dc.Clear();
 
     std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
@@ -78,41 +136,41 @@ void DisplayCard::onPaint(wxPaintEvent&) {
     const bool active = info_.active;
 
     // Soft drop shadow.
-    gc->SetBrush(wxBrush(wxColour(0, 0, 0, 12)));
+    gc->SetBrush(wxBrush(wxColour(0, 0, 0, th.shadowAlpha)));
     gc->SetPen(*wxTRANSPARENT_PEN);
     gc->DrawRoundedRectangle(m, m + 2, w, h, r);
 
     // Card body.
-    wxColour body = active ? kAccentSoft : (hover_ ? kCardHover : kCardBg);
+    wxColour body = active ? th.accentSoft : (hover_ ? th.cardHover : th.cardBg);
     gc->SetBrush(wxBrush(body));
-    wxColour border = active ? kAccent : (hover_ ? kAccent : kCardBorder);
+    wxColour border = active ? th.accent : (hover_ ? th.accent : th.cardBorder);
     gc->SetPen(wxPen(border, active ? 2 : 1));
     gc->DrawRoundedRectangle(m, m, w, h, r);
 
     // Monitor glyph.
-    drawGlyph(gc.get(), cx, m + 20, active ? kAccent : wxColour(176, 182, 190));
+    drawGlyph(gc.get(), cx, m + 20, active ? th.accent : th.glyphInactive);
 
     // Active check badge (top-right).
     if (active) {
         const double bx = sz.GetWidth() - m - 18, by = m + 14, br = 9;
-        gc->SetBrush(wxBrush(kAccent));
+        gc->SetBrush(wxBrush(th.accent));
         gc->SetPen(*wxTRANSPARENT_PEN);
         gc->DrawEllipse(bx - br, by - br, br * 2, br * 2);
         wxGraphicsPath tick = gc->CreatePath();
         tick.MoveToPoint(bx - 4, by);
         tick.AddLineToPoint(bx - 1, by + 3);
         tick.AddLineToPoint(bx + 4, by - 3);
-        gc->SetPen(wxPen(kWhite, 2));
+        gc->SetPen(wxPen(th.badgeText, 2));
         gc->StrokePath(tick);
     }
 
     // Text block. Backend strings are UTF-8, so decode them explicitly.
     centeredText(gc.get(), wxString::FromUTF8(info_.name), uiFont(12, wxFONTWEIGHT_BOLD),
-                 kTextDark, cx, m + 74);
+                 th.textPrimary, cx, m + 74);
 
     if (!info_.connector.empty()) {
         centeredText(gc.get(), wxString::FromUTF8(info_.connector).Upper(), uiFont(8),
-                     kTextGray, cx, m + 96);
+                     th.textGray, cx, m + 96);
     }
 
     wxString sub;
@@ -124,7 +182,7 @@ void DisplayCard::onPaint(wxPaintEvent&) {
         sub = "Tap to activate";
     }
     if (!sub.empty()) {
-        centeredText(gc.get(), sub, uiFont(8), active ? kAccent : kTextGray, cx, m + 116);
+        centeredText(gc.get(), sub, uiFont(8), active ? th.accent : th.textGray, cx, m + 116);
     }
 }
 
@@ -153,8 +211,9 @@ Chip::Chip(wxWindow* parent, const wxString& label, std::function<void()> onClic
 }
 
 void Chip::onPaint(wxPaintEvent&) {
+    const Theme& t = theme();
     wxAutoBufferedPaintDC dc(this);
-    dc.SetBackground(wxBrush(kWindowBg));
+    dc.SetBackground(wxBrush(t.windowBg));
     dc.Clear();
 
     std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
@@ -166,13 +225,13 @@ void Chip::onPaint(wxPaintEvent&) {
 
     wxColour bg, fg, border;
     if (filled_) {
-        bg = hover_ ? wxColour(27, 150, 83) : kAccent;
-        fg = kWhite;
+        bg = hover_ ? t.accentHover : t.accent;
+        fg = t.badgeText;
         border = bg;
     } else {
-        bg = hover_ ? kCardHover : kCardBg;
-        fg = hover_ ? kAccent : kTextDark;
-        border = hover_ ? kAccent : kCardBorder;
+        bg = hover_ ? t.cardHover : t.cardBg;
+        fg = hover_ ? t.accent : t.textPrimary;
+        border = hover_ ? t.accent : t.cardBorder;
     }
 
     gc->SetBrush(wxBrush(bg));

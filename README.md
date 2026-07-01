@@ -16,6 +16,9 @@ Windows drives.
 * **Live control center:** the app polls the display configuration and
   refreshes automatically when a display is plugged in/out or changed
   elsewhere, so the view always reflects reality.
+* **Light / dark theme:** **View → Theme** offers System (follows the OS
+  light/dark setting and updates live), Light, or Dark. The choice is
+  remembered; `HDMI_THEME=system|light|dark` overrides it for one run.
 * **LAN REST API:** the same actions are exposed over HTTP so you can switch
   from your phone, another PC, or a home-automation system.
 

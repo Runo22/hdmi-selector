@@ -8,17 +8,28 @@
 
 namespace hdmi::ui {
 
-// ---- Palette -------------------------------------------------------------
-// A light, modern theme. Accent green matches the app icon.
-inline const wxColour kWindowBg(245, 246, 248);
-inline const wxColour kCardBg(255, 255, 255);
-inline const wxColour kCardHover(250, 251, 252);
-inline const wxColour kCardBorder(228, 230, 234);
-inline const wxColour kAccent(31, 168, 93);
-inline const wxColour kAccentSoft(233, 248, 239);
-inline const wxColour kTextDark(26, 28, 32);
-inline const wxColour kTextGray(139, 145, 154);
-inline const wxColour kWhite(255, 255, 255);
+// ---- Theming -------------------------------------------------------------
+// The palette is chosen at runtime so the app can follow the OS light/dark
+// setting (or a manual override). Widgets read theme() at paint time.
+enum class ThemeMode { System, Light, Dark };
+
+struct Theme {
+    wxColour windowBg, cardBg, cardHover, cardBorder;
+    wxColour accent, accentHover, accentSoft;
+    wxColour textPrimary, textGray, badgeText, glyphInactive;
+    int shadowAlpha = 12;
+    bool dark = false;
+};
+
+// True if the OS is currently using a dark appearance.
+bool systemIsDark();
+
+// Resolve `mode` (System consults the OS) and make it the active theme.
+void setThemeMode(ThemeMode mode);
+ThemeMode themeMode();
+
+// The currently active, resolved theme.
+const Theme& theme();
 
 // A UI font, preferring Segoe UI (Windows) and falling back gracefully.
 wxFont uiFont(int pointSize, wxFontWeight weight = wxFONTWEIGHT_NORMAL);

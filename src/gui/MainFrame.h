@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "Widgets.h"
 #include "hdmi/Display.h"
 #include "hdmi/DisplayManager.h"
 #include "hdmi/RestServer.h"
@@ -35,12 +36,14 @@ public:
     void switchExclusive(const std::string& id);
     void applyTopology(Topology topology);
     void toggleAutostart();              // enable/disable launch-at-login
+    void setTheme(ui::ThemeMode mode);   // switch + persist the theme
     std::vector<DisplayInfo> displays() { return manager_.displays(); }
 
 private:
     void buildMenu();
     void rebuildCards();                 // re-query displays and redraw the row
     void refreshIfChanged();             // timer tick: rebuild only on change
+    void applyTheme();                   // push current theme colours into widgets
     static std::string signatureOf(const std::vector<DisplayInfo>& displays);
     void showError(const wxString& message);
 
@@ -50,6 +53,8 @@ private:
 
     wxPanel* cardRow_ = nullptr;         // holds the horizontal card sizer
     wxBoxSizer* cardSizer_ = nullptr;
+    wxStaticText* title_ = nullptr;      // header widgets, recoloured on theme change
+    wxStaticText* subtitle_ = nullptr;
     wxStaticText* statusText_ = nullptr; // footer REST status
 
     wxTimer pollTimer_;
