@@ -11,6 +11,10 @@ using nlohmann::json;
 namespace {
 
 json displayToJson(const DisplayInfo& d) {
+    json modes = json::array();
+    for (const auto& m : d.modes) {
+        modes.push_back(json{{"width", m.width}, {"height", m.height}, {"hz", m.hz}});
+    }
     return json{
         {"id", d.id},
         {"name", d.name},
@@ -19,8 +23,10 @@ json displayToJson(const DisplayInfo& d) {
         {"primary", d.primary},
         {"width", d.width},
         {"height", d.height},
+        {"refreshHz", d.refreshHz},
         {"posX", d.posX},
         {"posY", d.posY},
+        {"modes", modes},
     };
 }
 
@@ -110,6 +116,41 @@ struct RestServer::Impl {
                         for (const auto& d : manager.displays()) arr.push_back(displayToJson(d));
                         res.set_content(json{{"ok", true}, {"displays", arr}}.dump(),
                                         "application/json");
+                    });
+
+        // Set a display's resolution (+ optional refresh). hz omitted/<=0 picks
+        // the highest rate at that resolution. Selection is persisted.
+        server.Post(R"(/api/displays/([^/]+)/mode)",
+                    [this](const httplib::Request& req, httplib::Response& res) {
+                        const std::string id = req.matches[1];
+                        json body;
+                        try {
+                            body = json::parse(req.body);
+                        } catch (const std::exception&) {
+                            return sendError(res, 400, "request body is not valid JSON");
+                        }
+                        if (!body.contains("width") || !body.contains("height")) {
+                            return sendError(res, 400, "missing 'width'/'height'");
+                        }
+                        const int w = body.value("width", 0);
+                        const int h = body.value("height", 0);
+                        const int hz = body.value("hz", 0);
+                        std::string err;
+                        if (!manager.setMode(id, w, h, hz, &err)) {
+                            return sendError(res, 400, err);
+                        }
+                        res.set_content(json{{"ok", true}}.dump(), "application/json");
+                    });
+
+        // Raise a display to the highest refresh rate at its current resolution.
+        server.Post(R"(/api/displays/([^/]+)/maxhz)",
+                    [this](const httplib::Request& req, httplib::Response& res) {
+                        const std::string id = req.matches[1];
+                        std::string err;
+                        if (!manager.setMaxRefresh(id, &err)) {
+                            return sendError(res, 400, err);
+                        }
+                        res.set_content(json{{"ok", true}}.dump(), "application/json");
                     });
     }
 };

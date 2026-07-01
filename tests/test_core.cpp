@@ -5,8 +5,11 @@
 #include <memory>
 #include <string>
 
+#include <cstdio>
+
 #include "../src/backends/MockBackend.h"
 #include "hdmi/DisplayManager.h"
+#include "hdmi/ModeStore.h"
 
 namespace {
 
@@ -99,6 +102,45 @@ void testValidation() {
     check(!mgr->apply(extendOne, &err), "extend with a single id rejected");
 }
 
+void testSetMode() {
+    auto mgr = makeManager();
+    std::string err;
+    check(mgr->setMode("monitor", 2560, 1440, 0, &err), "set monitor to 2K (best hz)");
+    auto d = mgr->displays();
+    check(find(d, "monitor")->width == 2560 && find(d, "monitor")->height == 1440,
+          "monitor now at 2560x1440");
+    check(find(d, "monitor")->refreshHz == 120, "2K picked highest hz (120)");
+
+    check(!mgr->setMode("monitor", 1234, 567, 0, &err), "unsupported resolution rejected");
+    check(mgr->setMaxRefresh("monitor", &err), "max refresh at current res succeeds");
+}
+
+void testPersistence() {
+    const std::string path = "/tmp/hdmi_test_modes.json";
+    std::remove(path.c_str());
+
+    // First session: choose 4K on the tv and 2K on the monitor.
+    {
+        auto store = std::make_shared<hdmi::ModeStore>(path);
+        hdmi::DisplayManager mgr(std::make_unique<hdmi::MockBackend>(), store);
+        std::string err;
+        check(mgr.setMode("monitor", 2560, 1440, 120, &err), "session1: set monitor 2K@120");
+    }
+
+    // Second session with the same store: the saved mode is restored.
+    {
+        auto store = std::make_shared<hdmi::ModeStore>(path);
+        hdmi::DisplayManager mgr(std::make_unique<hdmi::MockBackend>(), store);
+        mgr.applySavedModes();
+        auto d = mgr.displays();
+        check(find(d, "monitor")->width == 2560 && find(d, "monitor")->refreshHz == 120,
+              "session2: monitor restored to saved 2K@120");
+        // The tv had no saved entry, so it keeps its current (default) state.
+        check(find(d, "tv") != nullptr, "tv still present with its current mode");
+    }
+    std::remove(path.c_str());
+}
+
 void testTopologyStrings() {
     hdmi::Topology t;
     check(hdmi::topologyFromString("extend", t) && t == hdmi::Topology::Extend,
@@ -116,6 +158,8 @@ int main() {
     testExtend();
     testDuplicate();
     testValidation();
+    testSetMode();
+    testPersistence();
     testTopologyStrings();
 
     if (g_failures == 0) {

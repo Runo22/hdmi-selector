@@ -97,15 +97,33 @@ wxFont uiFont(int pointSize, wxFontWeight weight) {
     return f;
 }
 
+wxString resolutionLabel(int width, int height) {
+    if (width == 7680 && height == 4320) return "8K";
+    if (width == 3840 && height == 2160) return "4K";
+    if (width == 3440 && height == 1440) return "UW 2K";
+    if (width == 2560 && height == 1440) return "2K";
+    if (width == 2560 && height == 1080) return "UW 1080p";
+    if (width == 1920 && height == 1080) return "1080p";
+    if (width == 1600 && height == 900) return "900p";
+    if (width == 1366 && height == 768) return "768p";
+    if (width == 1280 && height == 720) return "720p";
+    // "\xC3\x97" is × in UTF-8; build via FromUTF8 (locale-safe).
+    return wxString::FromUTF8(std::to_string(width) + "\xC3\x97" + std::to_string(height));
+}
+
 // ---------------------------------------------------------------------------
 // DisplayCard
 // ---------------------------------------------------------------------------
 
 DisplayCard::DisplayCard(wxWindow* parent, const DisplayInfo& info,
-                         std::function<void()> onActivate)
+                         std::function<void()> onActivate,
+                         std::function<void(int, int, int)> onSetMode,
+                         std::function<void()> onMaxHz)
     : wxWindow(parent, wxID_ANY, wxDefaultPosition, wxSize(172, 164)),
       info_(info),
       onActivate_(std::move(onActivate)),
+      onSetMode_(std::move(onSetMode)),
+      onMaxHz_(std::move(onMaxHz)),
       anim_(this) {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
     SetCursor(wxCursor(wxCURSOR_HAND));
@@ -114,7 +132,11 @@ DisplayCard::DisplayCard(wxWindow* parent, const DisplayInfo& info,
     Bind(wxEVT_PAINT, &DisplayCard::onPaint, this);
     Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent&) { animateTo(1.0); });
     Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent&) { animateTo(0.0); });
-    Bind(wxEVT_LEFT_UP, [this](wxMouseEvent&) { if (onActivate_) onActivate_(); });
+    Bind(wxEVT_LEFT_UP, &DisplayCard::onLeftUp, this);
+    // Right-click anywhere on an active card opens the options menu.
+    Bind(wxEVT_RIGHT_UP, [this](wxMouseEvent& e) {
+        if (info_.active) showOptions(e.GetPosition());
+    });
 
     // ~60 fps easing of the hover amount toward its target.
     Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
@@ -129,6 +151,67 @@ DisplayCard::DisplayCard(wxWindow* parent, const DisplayInfo& info,
 void DisplayCard::animateTo(double target) {
     hoverTarget_ = target;
     if (!anim_.IsRunning()) anim_.Start(16);
+}
+
+wxRect DisplayCard::optionsHotspot() const {
+    const wxSize sz = GetClientSize();
+    return wxRect(sz.GetWidth() - 42, sz.GetHeight() - 36, 34, 26);
+}
+
+void DisplayCard::onLeftUp(wxMouseEvent& e) {
+    // On an active card, the bottom-right "•••" opens options; elsewhere (and
+    // on inactive cards) a click switches to this display.
+    if (info_.active && optionsHotspot().Contains(e.GetPosition())) {
+        showOptions(e.GetPosition());
+        return;
+    }
+    if (onActivate_) onActivate_();
+}
+
+void DisplayCard::showOptions(const wxPoint& pos) {
+    // Unique resolutions (highest refresh each), largest first.
+    std::vector<DisplayMode> res;
+    for (const auto& m : info_.modes) {
+        auto it = std::find_if(res.begin(), res.end(), [&](const DisplayMode& r) {
+            return r.width == m.width && r.height == m.height;
+        });
+        if (it == res.end()) res.push_back({m.width, m.height, m.hz});
+        else it->hz = std::max(it->hz, m.hz);
+    }
+    std::sort(res.begin(), res.end(), [](const DisplayMode& a, const DisplayMode& b) {
+        return static_cast<long>(a.width) * a.height > static_cast<long>(b.width) * b.height;
+    });
+
+    // Highest refresh available at the current resolution.
+    int maxHzHere = 0;
+    for (const auto& m : info_.modes) {
+        if (m.width == info_.width && m.height == info_.height) {
+            maxHzHere = std::max(maxHzHere, m.hz);
+        }
+    }
+
+    wxMenu menu;
+    const int kResBase = 1000, kMaxHz = 2000;
+    for (size_t i = 0; i < res.size(); ++i) {
+        const auto& r = res[i];
+        wxString label = wxString::Format("%s  (%d×%d)", resolutionLabel(r.width, r.height),
+                                          r.width, r.height);
+        auto* item = menu.AppendRadioItem(kResBase + static_cast<int>(i), label);
+        if (r.width == info_.width && r.height == info_.height) item->Check(true);
+    }
+    if (maxHzHere > 0) {
+        menu.AppendSeparator();
+        menu.Append(kMaxHz, wxString::Format("Set max refresh rate (%d Hz)", maxHzHere));
+    }
+
+    const int sel = GetPopupMenuSelectionFromUser(menu, pos);
+    if (sel == wxID_NONE) return;
+    if (sel == kMaxHz) {
+        if (onMaxHz_) onMaxHz_();
+    } else if (sel >= kResBase && sel < kMaxHz) {
+        const auto& r = res[static_cast<size_t>(sel - kResBase)];
+        if (onSetMode_) onSetMode_(r.width, r.height, 0);  // 0 => best refresh
+    }
 }
 
 void DisplayCard::drawGlyph(wxGraphicsContext* gc, double cx, double top,
@@ -208,14 +291,27 @@ void DisplayCard::onPaint(wxPaintEvent&) {
 
     wxString sub;
     if (active && info_.width > 0) {
-        // "\xC3\x97" is the UTF-8 multiplication sign (×).
-        sub = wxString::FromUTF8(std::to_string(info_.width) + " \xC3\x97 " +
-                                 std::to_string(info_.height));
+        // "\xC3\x97" is × and "\xC2\xB7" is · in UTF-8.
+        std::string s = std::to_string(info_.width) + " \xC3\x97 " + std::to_string(info_.height);
+        if (info_.refreshHz > 0) s += "  \xC2\xB7  " + std::to_string(info_.refreshHz) + " Hz";
+        sub = wxString::FromUTF8(s);
     } else if (!active) {
         sub = "Tap to activate";
     }
     if (!sub.empty()) {
         centeredText(gc.get(), sub, uiFont(8), active ? th.accent : th.textGray, cx, top + 116);
+    }
+
+    // Options affordance ("•••") bottom-right on active cards, following the
+    // card's lifted position.
+    if (active) {
+        const double dotY = top + h - 16;
+        const double dotCx = sz.GetWidth() - mx - 16;
+        gc->SetBrush(wxBrush(th.textGray));
+        gc->SetPen(*wxTRANSPARENT_PEN);
+        for (int i = -1; i <= 1; ++i) {
+            gc->DrawEllipse(dotCx + i * 6 - 1.5, dotY - 1.5, 3, 3);
+        }
     }
 }
 

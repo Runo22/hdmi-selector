@@ -23,6 +23,8 @@ public:
 
     std::vector<DisplayInfo> list() override;
     bool apply(const SwitchRequest& request, std::string* error) override;
+    bool setMode(const std::string& id, int width, int height, int hz,
+                 std::string* error) override;
     const char* name() const override { return "mock"; }
 
 private:

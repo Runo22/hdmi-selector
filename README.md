@@ -19,6 +19,13 @@ Windows drives.
 * **Light / dark theme:** **View → Theme** offers System (follows the OS
   light/dark setting and updates live), Light, or Dark. The choice is
   remembered; `HDMI_THEME=system|light|dark` overrides it for one run.
+* **Resolution & refresh rate:** each active card shows its current resolution
+  and refresh (e.g. `1920 × 1080 · 144 Hz`). Click the **•••** on a card (or
+  right-click it) to pick a resolution — common ones are labelled **1080p / 2K /
+  4K** — or **Set max refresh rate**. Only modes the display actually supports
+  are offered (validated with `CDS_TEST`). The chosen mode is **saved per
+  monitor** (by its stable id) and re-applied on the next launch; monitors with
+  no saved selection keep their current mode.
 * **LAN REST API:** the same actions are exposed over HTTP so you can switch
   from your phone, another PC, or a home-automation system.
 
@@ -103,6 +110,8 @@ Default bind: `127.0.0.1:8420`. Auth is off unless a token is configured.
 | `GET /api/displays` | List all displays with active/primary/geometry |
 | `POST /api/switch` | Body `{ "mode": "exclusive\|extend\|duplicate", "ids": ["..."] }` |
 | `POST /api/displays/{id}/activate` | Exclusive-activate one display (convenience) |
+| `POST /api/displays/{id}/mode` | Body `{ "width": N, "height": N, "hz": N? }` — set resolution (+ optional refresh; omit `hz` for the max at that size). Persisted per monitor. |
+| `POST /api/displays/{id}/maxhz` | Raise the display to the highest refresh rate at its current resolution |
 
 `id` values come from `GET /api/displays`. When a token is set, send it as the
 `X-Auth-Token` header or a `?token=` query parameter.

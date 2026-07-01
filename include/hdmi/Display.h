@@ -6,6 +6,13 @@
 
 namespace hdmi {
 
+// A supported display mode: resolution + (integer) refresh rate.
+struct DisplayMode {
+    int width = 0;
+    int height = 0;
+    int hz = 0;
+};
+
 // How the desktop should be laid out across the selected displays.
 enum class Topology {
     Exclusive,   // exactly one display active (the 99% use case)
@@ -33,8 +40,12 @@ struct DisplayInfo {
     // Current mode / placement (only meaningful when active).
     int width = 0;
     int height = 0;
+    int refreshHz = 0;
     int posX = 0;
     int posY = 0;
+
+    // Supported modes, for the resolution / refresh-rate pickers.
+    std::vector<DisplayMode> modes;
 };
 
 // A request to change which displays are active and how they are arranged.

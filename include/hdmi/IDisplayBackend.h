@@ -27,6 +27,12 @@ public:
     // (if non-null) is filled with a human-readable reason.
     virtual bool apply(const SwitchRequest& request, std::string* error) = 0;
 
+    // Change the mode of one display. If `hz <= 0`, the highest refresh rate
+    // available at that resolution is chosen. Returns false (and fills `error`)
+    // if the mode is unsupported or the change is rejected.
+    virtual bool setMode(const std::string& id, int width, int height, int hz,
+                         std::string* error) = 0;
+
     // Short name of the backend, e.g. "windows" or "mock".
     virtual const char* name() const = 0;
 };

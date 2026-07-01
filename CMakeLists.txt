@@ -14,6 +14,7 @@ find_package(Threads REQUIRED)
 # ---------------------------------------------------------------------------
 set(CORE_SOURCES
     src/core/DisplayManager.cpp
+    src/core/ModeStore.cpp
     src/core/RestServer.cpp
     src/backends/MockBackend.cpp
     src/backends/backend_factory.cpp

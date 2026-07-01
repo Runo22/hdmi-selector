@@ -266,7 +266,21 @@ void MainFrame::rebuildCards() {
     }
     for (const auto& d : displays) {
         const std::string id = d.id;
-        auto* card = new DisplayCard(cardRow_, d, [this, id] { switchExclusive(id); });
+        auto* card = new DisplayCard(
+            cardRow_, d,
+            [this, id] { switchExclusive(id); },
+            [this, id](int w, int h, int hz) {
+                std::string err;
+                if (!manager_.setMode(id, w, h, hz, &err))
+                    showError(wxString::Format("Could not set mode: %s", err));
+                rebuildCards();
+            },
+            [this, id] {
+                std::string err;
+                if (!manager_.setMaxRefresh(id, &err))
+                    showError(wxString::Format("Could not set refresh rate: %s", err));
+                rebuildCards();
+            });
         cardSizer_->Add(card, 0, wxALIGN_CENTER_VERTICAL | wxALL, 8);
     }
     cardSizer_->AddStretchSpacer();

@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "hdmi/DisplayManager.h"
+#include "hdmi/ModeStore.h"
 #include "hdmi/RestServer.h"
 #include "hdmi/backend_factory.h"
 
@@ -40,7 +41,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    auto manager = std::make_unique<hdmi::DisplayManager>(hdmi::makeDefaultBackend());
+    auto store = std::make_shared<hdmi::ModeStore>(hdmi::ModeStore::defaultPath());
+    auto manager =
+        std::make_unique<hdmi::DisplayManager>(hdmi::makeDefaultBackend(), store);
+    manager->applySavedModes();  // restore per-monitor selections
     hdmi::RestServer server(*manager, cfg);
     if (!server.start()) {
         std::cerr << "error: could not bind " << cfg.host << ":" << cfg.port << "\n";

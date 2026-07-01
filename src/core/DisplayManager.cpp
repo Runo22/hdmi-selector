@@ -5,8 +5,9 @@
 
 namespace hdmi {
 
-DisplayManager::DisplayManager(std::unique_ptr<IDisplayBackend> backend)
-    : backend_(std::move(backend)) {}
+DisplayManager::DisplayManager(std::unique_ptr<IDisplayBackend> backend,
+                               std::shared_ptr<ModeStore> store)
+    : backend_(std::move(backend)), store_(std::move(store)) {}
 
 std::vector<DisplayInfo> DisplayManager::displays() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -60,7 +61,12 @@ bool DisplayManager::apply(const SwitchRequest& request, std::string* error) {
     if (!validateLocked(request, error)) {
         return false;
     }
-    return backend_->apply(request, error);
+    if (!backend_->apply(request, error)) {
+        return false;
+    }
+    // Newly-activated monitors adopt their saved mode (if any).
+    applySavedModesLocked();
+    return true;
 }
 
 bool DisplayManager::activateExclusive(const std::string& id, std::string* error) {
@@ -68,6 +74,63 @@ bool DisplayManager::activateExclusive(const std::string& id, std::string* error
     req.topology = Topology::Exclusive;
     req.activeIds = {id};
     return apply(req, error);
+}
+
+bool DisplayManager::setMode(const std::string& id, int width, int height, int hz,
+                             std::string* error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (width <= 0 || height <= 0) {
+        if (error) *error = "invalid resolution";
+        return false;
+    }
+    if (!backend_->setMode(id, width, height, hz, error)) return false;
+    persistCurrentLocked(id);
+    return true;
+}
+
+bool DisplayManager::setMaxRefresh(const std::string& id, std::string* error) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& d : backend_->list()) {
+        if (d.id != id) continue;
+        if (d.width <= 0 || d.height <= 0) {
+            if (error) *error = "display has no current resolution";
+            return false;
+        }
+        // hz<=0 lets the backend pick the highest rate at this resolution.
+        if (!backend_->setMode(id, d.width, d.height, 0, error)) return false;
+        persistCurrentLocked(id);
+        return true;
+    }
+    if (error) *error = "unknown display id: " + id;
+    return false;
+}
+
+void DisplayManager::persistCurrentLocked(const std::string& id) {
+    if (!store_) return;
+    // Save the resolved mode actually in effect (backend may have picked hz).
+    for (const auto& d : backend_->list()) {
+        if (d.id == id) {
+            store_->set(id, DisplayMode{d.width, d.height, d.refreshHz});
+            return;
+        }
+    }
+}
+
+void DisplayManager::applySavedModes() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    applySavedModesLocked();
+}
+
+void DisplayManager::applySavedModesLocked() {
+    if (!store_) return;
+    for (const auto& d : backend_->list()) {
+        if (!d.active) continue;
+        DisplayMode m;
+        if (!store_->get(d.id, m)) continue;  // no saved config -> keep current
+        if (m.width == d.width && m.height == d.height && m.hz == d.refreshHz) continue;
+        std::string err;
+        backend_->setMode(d.id, m.width, m.height, m.hz, &err);  // best effort
+    }
 }
 
 }  // namespace hdmi

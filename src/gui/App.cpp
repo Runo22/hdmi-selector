@@ -9,6 +9,7 @@
 #include "MainFrame.h"
 #include "Widgets.h"
 #include "hdmi/DisplayManager.h"
+#include "hdmi/ModeStore.h"
 #include "hdmi/RestServer.h"
 #include "hdmi/backend_factory.h"
 
@@ -40,7 +41,9 @@ public:
         else if (envTheme == "system") mode = static_cast<long>(hdmi::ui::ThemeMode::System);
         hdmi::ui::setThemeMode(static_cast<hdmi::ui::ThemeMode>(mode));
 
-        manager_ = std::make_unique<hdmi::DisplayManager>(hdmi::makeDefaultBackend());
+        auto store = std::make_shared<hdmi::ModeStore>(hdmi::ModeStore::defaultPath());
+        manager_ = std::make_unique<hdmi::DisplayManager>(hdmi::makeDefaultBackend(), store);
+        manager_->applySavedModes();  // restore per-monitor selections
 
         hdmi::RestConfig cfg;
         // Local-only by default. Set HDMI_HOST=0.0.0.0 (plus a token) to expose

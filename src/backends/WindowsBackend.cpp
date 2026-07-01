@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -81,6 +82,47 @@ bool pathActive(const DISPLAYCONFIG_PATH_INFO& p) {
     return (p.flags & DISPLAYCONFIG_PATH_ACTIVE) != 0;
 }
 
+// GDI device name ("\\.\DISPLAY1") for a path's source, needed by the classic
+// EnumDisplaySettings / ChangeDisplaySettingsEx mode APIs.
+std::wstring sourceGdiName(const DISPLAYCONFIG_PATH_INFO& p) {
+    DISPLAYCONFIG_SOURCE_DEVICE_NAME s = {};
+    s.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+    s.header.size = sizeof(s);
+    s.header.adapterId = p.sourceInfo.adapterId;
+    s.header.id = p.sourceInfo.id;
+    if (DisplayConfigGetDeviceInfo(&s.header) != ERROR_SUCCESS) return L"";
+    return s.viewGdiDeviceName;
+}
+
+// All distinct 32-bpp modes the GDI device reports.
+std::vector<DisplayMode> enumModes(const std::wstring& gdi) {
+    std::vector<DisplayMode> out;
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    for (DWORD i = 0; EnumDisplaySettingsW(gdi.c_str(), i, &dm); ++i) {
+        if (dm.dmBitsPerPel >= 32) {
+            DisplayMode m{static_cast<int>(dm.dmPelsWidth), static_cast<int>(dm.dmPelsHeight),
+                          static_cast<int>(dm.dmDisplayFrequency)};
+            const bool dup = std::any_of(out.begin(), out.end(), [&](const DisplayMode& e) {
+                return e.width == m.width && e.height == m.height && e.hz == m.hz;
+            });
+            if (!dup) out.push_back(m);
+        }
+        dm = {};
+        dm.dmSize = sizeof(dm);
+    }
+    return out;
+}
+
+int currentHz(const std::wstring& gdi) {
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    if (EnumDisplaySettingsW(gdi.c_str(), ENUM_CURRENT_SETTINGS, &dm)) {
+        return static_cast<int>(dm.dmDisplayFrequency);
+    }
+    return 0;
+}
+
 }  // namespace
 
 std::vector<DisplayInfo> WindowsBackend::list() {
@@ -113,6 +155,15 @@ std::vector<DisplayInfo> WindowsBackend::list() {
                 info.posX = sm.sourceMode.position.x;
                 info.posY = sm.sourceMode.position.y;
                 info.primary = (info.posX == 0 && info.posY == 0);
+            }
+        }
+
+        // Enumerate supported modes + current refresh via the GDI device name.
+        if (info.active) {
+            std::wstring gdi = sourceGdiName(p);
+            if (!gdi.empty()) {
+                info.modes = enumModes(gdi);
+                info.refreshHz = currentHz(gdi);
             }
         }
 
@@ -180,6 +231,55 @@ bool WindowsBackend::apply(const SwitchRequest& request, std::string* error) {
                                static_cast<UINT32>(modes.size()), modes.data(), flags);
     if (rc != ERROR_SUCCESS) {
         return fail("SetDisplayConfig failed (code " + std::to_string(rc) + ")");
+    }
+    return true;
+}
+
+bool WindowsBackend::setMode(const std::string& id, int width, int height, int hz,
+                             std::string* error) {
+    auto fail = [&](const std::string& msg) {
+        if (error) *error = msg;
+        return false;
+    };
+
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+    if (!queryAllPaths(paths, modes)) return fail("QueryDisplayConfig failed");
+
+    // The mode APIs act on the GDI device of the currently-active source.
+    std::wstring gdi;
+    for (const auto& p : paths) {
+        if (pathActive(p) && queryTarget(p).devicePath == id) {
+            gdi = sourceGdiName(p);
+            break;
+        }
+    }
+    if (gdi.empty()) return fail("display is not active: " + id);
+
+    // Resolve hz<=0 to the highest rate available at this resolution.
+    int freq = hz;
+    if (freq <= 0) {
+        for (const auto& m : enumModes(gdi)) {
+            if (m.width == width && m.height == height) freq = std::max(freq, m.hz);
+        }
+        if (freq <= 0) return fail("resolution not supported by this display");
+    }
+
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+    dm.dmPelsWidth = static_cast<DWORD>(width);
+    dm.dmPelsHeight = static_cast<DWORD>(height);
+    dm.dmDisplayFrequency = static_cast<DWORD>(freq);
+
+    // Validate before committing.
+    if (ChangeDisplaySettingsExW(gdi.c_str(), &dm, nullptr, CDS_TEST, nullptr) !=
+        DISP_CHANGE_SUCCESSFUL) {
+        return fail("mode not supported (validation failed)");
+    }
+    if (ChangeDisplaySettingsExW(gdi.c_str(), &dm, nullptr, CDS_UPDATEREGISTRY, nullptr) !=
+        DISP_CHANGE_SUCCESSFUL) {
+        return fail("failed to apply mode");
     }
     return true;
 }
