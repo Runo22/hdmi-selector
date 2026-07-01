@@ -194,8 +194,10 @@ void DisplayCard::showOptions(const wxPoint& pos) {
     const int kResBase = 1000, kMaxHz = 2000;
     for (size_t i = 0; i < res.size(); ++i) {
         const auto& r = res[i];
-        wxString label = wxString::Format("%s  (%d×%d)", resolutionLabel(r.width, r.height),
-                                          r.width, r.height);
+        // Build with FromUTF8 (× is non-ASCII and unsafe in a Format string).
+        wxString dims = wxString::FromUTF8(std::to_string(r.width) + "\xC3\x97" +
+                                           std::to_string(r.height));
+        wxString label = resolutionLabel(r.width, r.height) + "   (" + dims + ")";
         auto* item = menu.AppendRadioItem(kResBase + static_cast<int>(i), label);
         if (r.width == info_.width && r.height == info_.height) item->Check(true);
     }
