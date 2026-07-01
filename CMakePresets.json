@@ -1,0 +1,51 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 19, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release (MSVC x64)",
+      "description": "Full app + GUI + tray, optimized build.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "HDMI_BUILD_GUI": "ON",
+        "HDMI_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "linux-core",
+      "displayName": "Linux core + REST (Mock backend, no GUI)",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/linux-core",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "HDMI_BUILD_GUI": "OFF",
+        "HDMI_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "configuration": "Release"
+    },
+    { "name": "linux-core", "configurePreset": "linux-core" }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "linux-core",
+      "configurePreset": "linux-core",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}
