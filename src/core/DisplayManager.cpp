@@ -1,6 +1,8 @@
 #include "hdmi/DisplayManager.h"
 
 #include <algorithm>
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace hdmi {
@@ -11,7 +13,24 @@ DisplayManager::DisplayManager(std::unique_ptr<IDisplayBackend> backend,
 
 std::vector<DisplayInfo> DisplayManager::displays() {
     std::lock_guard<std::mutex> lock(mutex_);
-    return backend_->list();
+    auto list = backend_->list();
+
+    // Number connector labels when several displays share the same type
+    // (e.g. two HDMI outputs -> "HDMI 1", "HDMI 2").
+    std::unordered_map<std::string, int> total, seen;
+    for (const auto& d : list) {
+        if (!d.connector.empty()) total[d.connector]++;
+    }
+    for (auto& d : list) {
+        if (d.connector.empty()) {
+            d.connectorLabel.clear();
+        } else if (total[d.connector] > 1) {
+            d.connectorLabel = d.connector + " " + std::to_string(++seen[d.connector]);
+        } else {
+            d.connectorLabel = d.connector;
+        }
+    }
+    return list;
 }
 
 const char* DisplayManager::backendName() const {

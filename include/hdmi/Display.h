@@ -34,6 +34,11 @@ struct DisplayInfo {
     // UI beneath the name. May be empty if the OS doesn't report it.
     std::string connector;
 
+    // Display label for the connector, numbered when several displays share the
+    // same type (e.g. "HDMI 1", "HDMI 2"). Filled by DisplayManager; falls back
+    // to `connector` when unique. UI should prefer this.
+    std::string connectorLabel;
+
     bool active = false;    // currently part of the Windows desktop
     bool primary = false;   // is the primary display
 

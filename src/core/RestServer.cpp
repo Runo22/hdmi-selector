@@ -19,6 +19,7 @@ json displayToJson(const DisplayInfo& d) {
         {"id", d.id},
         {"name", d.name},
         {"connector", d.connector},
+        {"connectorLabel", d.connectorLabel},
         {"active", d.active},
         {"primary", d.primary},
         {"width", d.width},

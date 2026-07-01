@@ -10,6 +10,9 @@ Windows drives.
 * **Advanced alternatives:** *Extend* (one big desktop across both) and
   *Duplicate* (mirror the same image) live in the **Advanced** menu so they
   don't clutter the main view.
+* **Clear naming:** displays show their monitor name and connector; when several
+  share a connector type they're numbered (**HDMI 1**, **HDMI 2**). Long names
+  are ellipsized so they never overflow the card or panel.
 * **System-tray control:** a tray icon with a right-click menu lets you switch
   displays (and reach the Advanced modes) without opening the window. Closing
   the window hides to the tray; quit from **File → Exit** or the tray menu.
@@ -45,10 +48,14 @@ are needed and it's fully reversible from the same toggle.
 
 ## Is this safe? (anti-cheat / performance)
 
-* **Anti-cheat:** yes, safe. The app only calls standard Windows display APIs
-  (`SetDisplayConfig` / `QueryDisplayConfig`) and runs a local HTTP server. It
-  does not touch, read, or inject into any game process, so anti-cheats (EAC,
-  BattlEye, Vanguard, …) have nothing to flag.
+* **Anti-cheat:** yes, safe. The app only calls standard, documented Windows
+  display APIs (`SetDisplayConfig`/`QueryDisplayConfig`,
+  `ChangeDisplaySettingsEx`/`EnumDisplaySettings`), reads/writes its own
+  `HKCU` registry keys, and runs a local HTTP server. It performs **no**
+  process injection, no `ReadProcessMemory`/`WriteProcessMemory`, no
+  `CreateRemoteThread`, no global hooks (`SetWindowsHookEx`), no synthetic input
+  (`SendInput`), and loads no drivers — so anti-cheats (EAC, BattlEye, Vanguard,
+  …) have nothing to flag. It never touches any game process.
 * **Performance:** negligible. A switch is a single OS call; the REST listener
   idles at ~0% CPU and a few MB of RAM. There is no polling of games.
 * **Networking:** the REST server binds to `127.0.0.1` (local only) by default.

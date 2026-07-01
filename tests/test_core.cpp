@@ -141,6 +141,23 @@ void testPersistence() {
     std::remove(path.c_str());
 }
 
+void testConnectorNumbering() {
+    auto mk = [](std::string id, std::string conn) {
+        hdmi::DisplayInfo d;
+        d.id = std::move(id);
+        d.name = "disp";
+        d.connector = std::move(conn);
+        return d;
+    };
+    std::vector<hdmi::DisplayInfo> ds = {mk("a", "HDMI"), mk("b", "HDMI"),
+                                         mk("c", "DisplayPort")};
+    hdmi::DisplayManager mgr(std::make_unique<hdmi::MockBackend>(ds));
+    auto d = mgr.displays();
+    check(find(d, "a")->connectorLabel == "HDMI 1", "first HDMI numbered 1");
+    check(find(d, "b")->connectorLabel == "HDMI 2", "second HDMI numbered 2");
+    check(find(d, "c")->connectorLabel == "DisplayPort", "sole DisplayPort not numbered");
+}
+
 void testTopologyStrings() {
     hdmi::Topology t;
     check(hdmi::topologyFromString("extend", t) && t == hdmi::Topology::Extend,
@@ -160,6 +177,7 @@ int main() {
     testValidation();
     testSetMode();
     testPersistence();
+    testConnectorNumbering();
     testTopologyStrings();
 
     if (g_failures == 0) {

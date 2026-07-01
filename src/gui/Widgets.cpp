@@ -66,6 +66,22 @@ wxColour lerpColour(const wxColour& a, const wxColour& b, double t) {
 // Smoothstep easing for a softer feel than a linear ramp.
 double ease(double t) { return t * t * (3.0 - 2.0 * t); }
 
+// Trim `s` with a trailing ellipsis so it fits within maxWidth for `font`.
+wxString ellipsize(wxGraphicsContext* gc, const wxString& s, const wxFont& font, double maxWidth) {
+    gc->SetFont(font, *wxBLACK);
+    double w = 0, h = 0, d = 0, e = 0;
+    gc->GetTextExtent(s, &w, &h, &d, &e);
+    if (w <= maxWidth) return s;
+    const wxString ell = wxString::FromUTF8("\xE2\x80\xA6");  // …
+    wxString out = s;
+    while (!out.empty()) {
+        out.RemoveLast();
+        gc->GetTextExtent(out + ell, &w, &h, &d, &e);
+        if (w <= maxWidth) return out + ell;
+    }
+    return ell;
+}
+
 // Draw text horizontally centred on cx at vertical position y.
 void centeredText(wxGraphicsContext* gc, const wxString& s, const wxFont& font,
                   const wxColour& colour, double cx, double y) {
@@ -133,9 +149,9 @@ DisplayCard::DisplayCard(wxWindow* parent, const DisplayInfo& info,
     Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent&) { animateTo(1.0); });
     Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent&) { animateTo(0.0); });
     Bind(wxEVT_LEFT_UP, &DisplayCard::onLeftUp, this);
-    // Right-click anywhere on an active card opens the options panel.
+    // Right-click anywhere on an active card with modes opens the options panel.
     Bind(wxEVT_RIGHT_UP, [this](wxMouseEvent&) {
-        if (info_.active && onOptions_) onOptions_();
+        if (info_.active && !info_.modes.empty() && onOptions_) onOptions_();
     });
 
     // ~60 fps easing of the hover amount toward its target.
@@ -159,9 +175,9 @@ wxRect DisplayCard::optionsHotspot() const {
 }
 
 void DisplayCard::onLeftUp(wxMouseEvent& e) {
-    // On an active card, the top-right "•••" opens the options panel; elsewhere
-    // (and on inactive cards) a click switches to this display.
-    if (info_.active && optionsHotspot().Contains(e.GetPosition())) {
+    // On an active card with modes, the top-right "•••" opens the options panel;
+    // elsewhere (and on inactive cards) a click switches to this display.
+    if (info_.active && !info_.modes.empty() && optionsHotspot().Contains(e.GetPosition())) {
         if (onOptions_) onOptions_();
         return;
     }
@@ -235,13 +251,17 @@ void DisplayCard::onPaint(wxPaintEvent&) {
         gc->StrokePath(tick);
     }
 
-    // Text block. Backend strings are UTF-8, so decode them explicitly.
-    centeredText(gc.get(), wxString::FromUTF8(info_.name), uiFont(12, wxFONTWEIGHT_BOLD),
-                 th.textPrimary, cx, top + 74);
+    // Text block. Backend strings are UTF-8, so decode them explicitly. The
+    // name is ellipsized so a long monitor name can't overflow the card.
+    const wxFont nameFont = uiFont(12, wxFONTWEIGHT_BOLD);
+    wxString name = ellipsize(gc.get(), wxString::FromUTF8(info_.name), nameFont, w - 20);
+    centeredText(gc.get(), name, nameFont, th.textPrimary, cx, top + 74);
 
-    if (!info_.connector.empty()) {
-        centeredText(gc.get(), wxString::FromUTF8(info_.connector).Upper(), uiFont(8),
-                     th.textGray, cx, top + 96);
+    const std::string& conn =
+        !info_.connectorLabel.empty() ? info_.connectorLabel : info_.connector;
+    if (!conn.empty()) {
+        centeredText(gc.get(), wxString::FromUTF8(conn).Upper(), uiFont(8), th.textGray, cx,
+                     top + 96);
     }
 
     wxString sub;
@@ -257,8 +277,9 @@ void DisplayCard::onPaint(wxPaintEvent&) {
         centeredText(gc.get(), sub, uiFont(8), active ? th.accent : th.textGray, cx, top + 116);
     }
 
-    // Options affordance ("•••") top-right on active cards.
-    if (active) {
+    // Options affordance ("•••") top-right on active cards that have adjustable
+    // modes to offer.
+    if (active && !info_.modes.empty()) {
         const double dotY = top + 14;
         const double dotCx = sz.GetWidth() - mx - 16;
         gc->SetBrush(wxBrush(th.textGray));
@@ -344,8 +365,9 @@ std::vector<DisplayMode> uniqueResolutions(const std::vector<DisplayMode>& modes
         if (it == res.end()) res.push_back({m.width, m.height, m.hz});
         else it->hz = std::max(it->hz, m.hz);
     }
+    // Ascending by pixel count so the row reads smallest -> 4K.
     std::sort(res.begin(), res.end(), [](const DisplayMode& a, const DisplayMode& b) {
-        return static_cast<long>(a.width) * a.height > static_cast<long>(b.width) * b.height;
+        return static_cast<long>(a.width) * a.height < static_cast<long>(b.width) * b.height;
     });
     return res;
 }
@@ -434,22 +456,38 @@ void OptionsPanel::rebuild() {
 
     contentSizer_->AddSpacer(16);
 
-    // Header: display name + a Close chip.
+    // Header: display name (ellipsized so it can't overflow) + a Close chip.
     auto* head = new wxBoxSizer(wxHORIZONTAL);
-    head->Add(addLabel(wxString::FromUTF8(info_.name), 12, wxFONTWEIGHT_BOLD, th.textPrimary), 1,
-              wxALIGN_CENTER_VERTICAL);
+    auto* nameLbl = new wxStaticText(content_, wxID_ANY, wxString::FromUTF8(info_.name),
+                                     wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
+    nameLbl->SetFont(uiFont(12, wxFONTWEIGHT_BOLD));
+    nameLbl->SetForegroundColour(th.textPrimary);
+    head->Add(nameLbl, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
     head->Add(new Chip(content_, "Close", [this] { if (onClose_) onClose_(); }), 0,
               wxALIGN_CENTER_VERTICAL);
     contentSizer_->Add(head, 0, wxEXPAND | wxLEFT | wxRIGHT, 16);
 
-    if (!info_.connector.empty()) {
+    const std::string& conn =
+        !info_.connectorLabel.empty() ? info_.connectorLabel : info_.connector;
+    if (!conn.empty()) {
         contentSizer_->Add(
-            addLabel(wxString::FromUTF8(info_.connector).Upper(), 8, wxFONTWEIGHT_NORMAL,
-                     th.textGray),
-            0, wxLEFT | wxRIGHT | wxTOP, 16);
+            addLabel(wxString::FromUTF8(conn).Upper(), 8, wxFONTWEIGHT_NORMAL, th.textGray), 0,
+            wxLEFT | wxRIGHT | wxTOP, 16);
     }
 
-    // Resolution section.
+    // No adjustable modes reported: say so instead of empty sections.
+    if (info_.modes.empty()) {
+        contentSizer_->AddSpacer(16);
+        contentSizer_->Add(
+            addLabel("No adjustable display modes", 9, wxFONTWEIGHT_NORMAL, th.textGray), 0,
+            wxLEFT | wxRIGHT, 16);
+        contentSizer_->AddStretchSpacer();
+        content_->Layout();
+        return;
+    }
+
+    // Resolution section (smallest -> 4K). Selecting a resolution keeps the
+    // current refresh rate when that rate exists at the new size, else best.
     contentSizer_->AddSpacer(14);
     contentSizer_->Add(addLabel("RESOLUTION", 8, wxFONTWEIGHT_BOLD, th.textGray), 0,
                        wxLEFT | wxRIGHT, 16);
@@ -458,8 +496,17 @@ void OptionsPanel::rebuild() {
     for (const auto& r : uniqueResolutions(info_.modes)) {
         const bool sel = (r.width == info_.width && r.height == info_.height);
         const int w = r.width, h = r.height;
-        auto* chip = new Chip(content_, resolutionLabel(w, h),
-                              [this, w, h] { if (onSetMode_) onSetMode_(w, h, 0); }, sel);
+        auto* chip = new Chip(content_, resolutionLabel(w, h), [this, w, h] {
+            if (!onSetMode_) return;
+            int keep = 0;  // 0 => backend picks the highest at this resolution
+            for (const auto& m : info_.modes) {
+                if (m.width == w && m.height == h && m.hz == info_.refreshHz) {
+                    keep = info_.refreshHz;
+                    break;
+                }
+            }
+            onSetMode_(w, h, keep);
+        }, sel);
         resWrap->Add(chip, 0, wxALL, 3);
     }
     contentSizer_->Add(resWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, 13);

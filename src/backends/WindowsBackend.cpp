@@ -100,7 +100,10 @@ std::vector<DisplayMode> enumModes(const std::wstring& gdi) {
     DEVMODEW dm = {};
     dm.dmSize = sizeof(dm);
     for (DWORD i = 0; EnumDisplaySettingsW(gdi.c_str(), i, &dm); ++i) {
-        if (dm.dmBitsPerPel >= 32) {
+        const bool interlaced = (dm.dmDisplayFlags & DM_INTERLACED) != 0;
+        // Keep only progressive, 32-bpp modes with a real refresh rate (0/1 are
+        // "use hardware default" placeholders Windows may return).
+        if (dm.dmBitsPerPel >= 32 && !interlaced && dm.dmDisplayFrequency > 1) {
             DisplayMode m{static_cast<int>(dm.dmPelsWidth), static_cast<int>(dm.dmPelsHeight),
                           static_cast<int>(dm.dmDisplayFrequency)};
             const bool dup = std::any_of(out.begin(), out.end(), [&](const DisplayMode& e) {

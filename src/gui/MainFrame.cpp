@@ -229,7 +229,7 @@ void MainFrame::toggleAutostart() {
     const bool enable = !autostart::isEnabled();
     std::string err;
     if (!autostart::setEnabled(enable, &err)) {
-        showError(wxString::Format("Could not update startup setting: %s", err));
+        showError("Could not update startup setting: " + wxString::FromUTF8(err));
     }
     // Reflect the (possibly unchanged) real state back into the menu checkbox.
     if (wxMenuBar* bar = GetMenuBar()) {
@@ -295,7 +295,7 @@ void MainFrame::rebuildCards() {
 void MainFrame::switchExclusive(const std::string& id) {
     std::string err;
     if (!manager_.activateExclusive(id, &err)) {
-        showError(wxString::Format("Could not switch: %s", err));
+        showError("Could not switch: " + wxString::FromUTF8(err));
     }
     rebuildCards();
 }
@@ -313,7 +313,8 @@ void MainFrame::applyTopology(Topology topology) {
 
     std::string err;
     if (!manager_.apply(req, &err)) {
-        showError(wxString::Format("Could not apply %s: %s", topologyToString(topology), err));
+        showError("Could not apply " + wxString::FromUTF8(topologyToString(topology)) + ": " +
+                  wxString::FromUTF8(err));
     }
     rebuildCards();
 }
@@ -342,7 +343,7 @@ void MainFrame::openOptionsFor(const std::string& id) {
 void MainFrame::changeMode(std::string id, int w, int h, int hz) {
     std::string err;
     if (!manager_.setMode(id, w, h, hz, &err)) {
-        showError(wxString::Format("Could not apply mode: %s", err));
+        showError("Could not apply mode: " + wxString::FromUTF8(err));
     }
     // Rebuild after the current event finishes: this callback runs from a chip
     // inside the drawer, and rebuildCards() re-populates (deletes) that chip.
