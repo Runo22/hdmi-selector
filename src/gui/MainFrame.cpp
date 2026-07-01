@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "../../resources/app.xpm"  // provides appicon_xpm
+#include "hdmi/Autostart.h"
 
 namespace hdmi {
 
@@ -14,11 +15,13 @@ enum {
     ID_Refresh = wxID_HIGHEST + 1,
     ID_ExtendBoth,
     ID_DuplicateBoth,
+    ID_ToggleAutostart,
 
     // Tray menu ids.
     ID_TrayOpen,
     ID_TrayExtend,
     ID_TrayDuplicate,
+    ID_TrayAutostart,
     ID_TrayExit,
     ID_TrayDisplayBase = wxID_HIGHEST + 100,  // + display index
 };
@@ -106,6 +109,11 @@ void MainFrame::buildMenu() {
 
     auto* fileMenu = new wxMenu();
     fileMenu->Append(ID_Refresh, "&Refresh\tF5", "Re-scan connected displays");
+    if (autostart::isSupported()) {
+        auto* item = fileMenu->AppendCheckItem(ID_ToggleAutostart, "Start with &Windows",
+                                               "Launch automatically at login (to the tray)");
+        item->Check(autostart::isEnabled());
+    }
     fileMenu->AppendSeparator();
     fileMenu->Append(wxID_EXIT, "E&xit\tCtrl+Q");
     menuBar->Append(fileMenu, "&File");
@@ -128,6 +136,21 @@ void MainFrame::buildMenu() {
          ID_ExtendBoth);
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { applyTopology(Topology::Duplicate); },
          ID_DuplicateBoth);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { toggleAutostart(); }, ID_ToggleAutostart);
+}
+
+void MainFrame::toggleAutostart() {
+    const bool enable = !autostart::isEnabled();
+    std::string err;
+    if (!autostart::setEnabled(enable, &err)) {
+        showError(wxString::Format("Could not update startup setting: %s", err));
+    }
+    // Reflect the (possibly unchanged) real state back into the menu checkbox.
+    if (wxMenuBar* bar = GetMenuBar()) {
+        if (wxMenuItem* item = bar->FindItem(ID_ToggleAutostart)) {
+            item->Check(autostart::isEnabled());
+        }
+    }
 }
 
 std::string MainFrame::signatureOf(const std::vector<DisplayInfo>& displays) {
@@ -229,6 +252,8 @@ TrayIcon::TrayIcon(MainFrame* frame) : frame_(frame) {
             frame_->applyTopology(Topology::Extend);
         } else if (id == ID_TrayDuplicate) {
             frame_->applyTopology(Topology::Duplicate);
+        } else if (id == ID_TrayAutostart) {
+            frame_->toggleAutostart();
         } else if (id == ID_TrayExit) {
             frame_->Destroy();
         } else if (id >= ID_TrayDisplayBase) {
@@ -267,6 +292,10 @@ wxMenu* TrayIcon::CreatePopupMenu() {
     menu->AppendSubMenu(advanced, "Advanced");
 
     menu->AppendSeparator();
+    if (autostart::isSupported()) {
+        auto* item = menu->AppendCheckItem(ID_TrayAutostart, "Start with Windows");
+        item->Check(autostart::isEnabled());
+    }
     menu->Append(ID_TrayOpen, "Open HDMI Selector");
     menu->Append(ID_TrayExit, "Exit");
     return menu;

@@ -19,6 +19,18 @@ Windows drives.
 * **LAN REST API:** the same actions are exposed over HTTP so you can switch
   from your phone, another PC, or a home-automation system.
 
+## Run at startup (not a service)
+
+Enable **File → "Start with Windows"** (also in the tray menu) to launch the app
+automatically at login, straight to the tray.
+
+This is deliberately a **login-time app, not a Windows service.** Services run in
+the non-interactive Session 0, where they can neither change the desktop's
+display configuration (`SetDisplayConfig` targets the caller's session) nor show
+a tray icon — so a service could host the REST API but couldn't actually switch
+anything. Auto-start uses the per-user `Run` registry key, so **no admin rights**
+are needed and it's fully reversible from the same toggle.
+
 ## Is this safe? (anti-cheat / performance)
 
 * **Anti-cheat:** yes, safe. The app only calls standard Windows display APIs

@@ -34,6 +34,7 @@ public:
     // Shared entry points used by both the window and the tray menu.
     void switchExclusive(const std::string& id);
     void applyTopology(Topology topology);
+    void toggleAutostart();              // enable/disable launch-at-login
     std::vector<DisplayInfo> displays() { return manager_.displays(); }
 
 private:

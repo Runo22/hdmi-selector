@@ -17,6 +17,7 @@ set(CORE_SOURCES
     src/core/RestServer.cpp
     src/backends/MockBackend.cpp
     src/backends/backend_factory.cpp
+    src/platform/Autostart.cpp
 )
 if(WIN32)
     list(APPEND CORE_SOURCES src/backends/WindowsBackend.cpp)
