@@ -2,6 +2,9 @@
 
 #include "WindowsBackend.h"
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 #include <algorithm>
