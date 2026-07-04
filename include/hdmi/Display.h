@@ -51,6 +51,13 @@ struct DisplayInfo {
 
     // Supported modes, for the resolution / refresh-rate pickers.
     std::vector<DisplayMode> modes;
+
+    // The monitor's EDID-reported preferred (native) resolution, when known
+    // (0 if not). Used to restore a display to its own best resolution after
+    // it's re-activated, instead of leaving whatever the OS carried over from
+    // whichever display was previously using the same output.
+    int nativeWidth = 0;
+    int nativeHeight = 0;
 };
 
 // A request to change which displays are active and how they are arranged.
@@ -76,6 +83,22 @@ inline bool topologyFromString(const std::string& s, Topology& out) {
     if (s == "extend")    { out = Topology::Extend;    return true; }
     if (s == "duplicate") { out = Topology::Duplicate; return true; }
     return false;
+}
+
+// Friendly label for common resolutions ("1080p", "2K", "4K", ...), else
+// "WxH". Shared by the GUI's resolution picker and the REST API's status
+// messages so both describe a mode the same way.
+inline std::string resolutionLabel(int width, int height) {
+    if (width == 7680 && height == 4320) return "8K";
+    if (width == 3840 && height == 2160) return "4K";
+    if (width == 3440 && height == 1440) return "UW 2K";
+    if (width == 2560 && height == 1440) return "2K";
+    if (width == 2560 && height == 1080) return "UW 1080p";
+    if (width == 1920 && height == 1080) return "1080p";
+    if (width == 1600 && height == 900) return "900p";
+    if (width == 1366 && height == 768) return "768p";
+    if (width == 1280 && height == 720) return "720p";
+    return std::to_string(width) + "\xC3\x97" + std::to_string(height);  // "x" is U+00D7 in UTF-8
 }
 
 }  // namespace hdmi

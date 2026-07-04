@@ -118,17 +118,7 @@ wxFont uiFont(int pointSize, wxFontWeight weight) {
 }
 
 wxString resolutionLabel(int width, int height) {
-    if (width == 7680 && height == 4320) return "8K";
-    if (width == 3840 && height == 2160) return "4K";
-    if (width == 3440 && height == 1440) return "UW 2K";
-    if (width == 2560 && height == 1440) return "2K";
-    if (width == 2560 && height == 1080) return "UW 1080p";
-    if (width == 1920 && height == 1080) return "1080p";
-    if (width == 1600 && height == 900) return "900p";
-    if (width == 1366 && height == 768) return "768p";
-    if (width == 1280 && height == 720) return "720p";
-    // "\xC3\x97" is × in UTF-8; build via FromUTF8 (locale-safe).
-    return wxString::FromUTF8(std::to_string(width) + "\xC3\x97" + std::to_string(height));
+    return wxString::FromUTF8(hdmi::resolutionLabel(width, height));
 }
 
 // ---------------------------------------------------------------------------

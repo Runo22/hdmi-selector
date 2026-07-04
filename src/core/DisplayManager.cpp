@@ -190,12 +190,23 @@ void DisplayManager::applySavedModes() {
 }
 
 void DisplayManager::applySavedModesLocked() {
-    if (!store_) return;
     for (const auto& d : backend_->list()) {
         if (!d.active) continue;
+
         DisplayMode m;
-        if (!store_->get(d.id, m)) continue;  // no saved config -> keep current
-        if (m.width == d.width && m.height == d.height && m.hz == d.refreshHz) continue;
+        if (!store_ || !store_->get(d.id, m)) {
+            // No explicit preference: fall back to this display's own native
+            // resolution. Without this, a display re-activated after another
+            // one (e.g. switching back after using a lower-res display) can
+            // be left at whatever resolution the OS carried over from that
+            // other display, rather than its own best mode.
+            if (d.nativeWidth <= 0 || d.nativeHeight <= 0) continue;
+            m = DisplayMode{d.nativeWidth, d.nativeHeight, 0};
+        }
+        if (m.width == d.width && m.height == d.height &&
+            (m.hz <= 0 || m.hz == d.refreshHz)) {
+            continue;
+        }
         std::string err;
         backend_->setMode(d.id, m.width, m.height, m.hz, &err);  // best effort
     }

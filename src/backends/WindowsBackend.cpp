@@ -183,6 +183,7 @@ std::vector<DisplayInfo> WindowsBackend::list() {
         info.name = t.friendly;
         info.connector = t.connector;
         info.active = pathActive(p);
+        queryPreferredSize(p, &info.nativeWidth, &info.nativeHeight);
 
         if (info.active && p.sourceInfo.modeInfoIdx != DISPLAYCONFIG_PATH_MODE_IDX_INVALID &&
             p.sourceInfo.modeInfoIdx < modes.size()) {
