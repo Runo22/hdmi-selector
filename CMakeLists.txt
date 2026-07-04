@@ -68,6 +68,9 @@ if(HDMI_BUILD_GUI)
 
         add_executable(hdmi_gui WIN32 ${GUI_SOURCES})
         target_link_libraries(hdmi_gui PRIVATE hdmi_core ${wxWidgets_LIBRARIES})
+        if(WIN32)
+            target_link_libraries(hdmi_gui PRIVATE dwmapi)  # DwmSetWindowAttribute (dark title bar)
+        endif()
         message(STATUS "wxWidgets found - building hdmi_gui")
 
         install(TARGETS hdmi_gui RUNTIME DESTINATION bin)

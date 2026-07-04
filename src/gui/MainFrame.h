@@ -21,8 +21,10 @@ class TrayIcon;
 //
 // The primary interaction is a horizontal row of display "cards"; clicking one
 // makes it the sole active display (Exclusive switch) - the 99% use case.
-// Extend / Duplicate live in the "Advanced" menu so they don't compete
-// visually with the main action.
+// Extend / Duplicate are secondary header chips so they don't compete
+// visually with the main action. There is no native menu bar: Windows can't
+// theme it dark, so app settings (theme, autostart, exit) live in the same
+// custom-drawn side drawer used for per-display resolution/refresh options.
 //
 // A lightweight timer polls the display configuration and refreshes the view
 // automatically when displays are plugged in/out or changed elsewhere, giving
@@ -40,12 +42,12 @@ public:
     std::vector<DisplayInfo> displays() { return manager_.displays(); }
 
 private:
-    void buildMenu();
     void rebuildCards();                 // re-query displays and redraw the row
     void refreshIfChanged();             // timer tick: rebuild only on change
     void applyTheme();                   // push current theme colours into widgets
     void openOptionsFor(const std::string& id);   // open/refresh the side drawer
     void configureDrawer(const std::string& id);  // (re)populate drawer for a display
+    void openSettings();                 // open/refresh the settings side drawer
     // `id` is taken by value on purpose: applying a mode rebuilds the drawer,
     // which replaces the very callback that invoked this, freeing a captured id.
     void changeMode(std::string id, int w, int h, int hz);  // apply + verify
@@ -61,8 +63,9 @@ private:
     wxStaticText* title_ = nullptr;      // header widgets, recoloured on theme change
     wxStaticText* subtitle_ = nullptr;
     wxStaticText* statusText_ = nullptr; // footer REST status
-    ui::OptionsPanel* drawer_ = nullptr; // collapsible resolution/refresh panel
-    std::string drawerId_;               // display the drawer is showing (if any)
+    ui::OptionsPanel* drawer_ = nullptr; // collapsible resolution/refresh/settings panel
+    std::string drawerId_;               // display the drawer is showing; empty if closed
+                                          // or showing the app-settings panel instead
 
     wxTimer pollTimer_;
     std::string lastSignature_;          // detects display-config changes
@@ -78,7 +81,7 @@ public:
     wxMenu* CreatePopupMenu() override;
 
 private:
-    void onLeftDClick(wxTaskBarIconEvent&);
+    void onLeftUp(wxTaskBarIconEvent&);
     MainFrame* frame_;
     std::vector<std::string> menuDisplayIds_;  // menu item index -> display id
 };

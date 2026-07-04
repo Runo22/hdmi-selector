@@ -9,6 +9,7 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace hdmi::ui {
@@ -384,6 +385,47 @@ std::vector<int> refreshRatesAt(const std::vector<DisplayMode>& modes, int w, in
     std::sort(hz.begin(), hz.end());
     return hz;
 }
+
+// Curated resolutions/rates so the panel shows a short, familiar row instead
+// of every mode the driver reports (which can be 100+ entries). Entries the
+// display doesn't actually support are dropped by the callers below; the
+// currently-applied value is always kept even if it's not in these lists, so
+// the panel never hides what's active.
+const std::vector<std::pair<int, int>>& commonResolutions() {
+    static const std::vector<std::pair<int, int>> kCommon = {
+        {1280, 720}, {1366, 768}, {1600, 900},  {1920, 1080},
+        {2560, 1080}, {2560, 1440}, {3440, 1440}, {3840, 2160}, {7680, 4320},
+    };
+    return kCommon;
+}
+
+const std::vector<int>& commonRefreshRates() {
+    static const std::vector<int> kCommon = {60, 75, 90, 100, 120, 144, 165, 240};
+    return kCommon;
+}
+
+std::vector<DisplayMode> keepCommon(const std::vector<DisplayMode>& res, int curW, int curH) {
+    const auto& common = commonResolutions();
+    std::vector<DisplayMode> out;
+    for (const auto& r : res) {
+        const bool isCommon =
+            std::find(common.begin(), common.end(), std::make_pair(r.width, r.height)) !=
+            common.end();
+        if (isCommon || (r.width == curW && r.height == curH)) out.push_back(r);
+    }
+    return out;
+}
+
+std::vector<int> keepCommonHz(const std::vector<int>& hz, int curHz) {
+    const auto& common = commonRefreshRates();
+    std::vector<int> out;
+    for (int h : hz) {
+        if (std::find(common.begin(), common.end(), h) != common.end() || h == curHz) {
+            out.push_back(h);
+        }
+    }
+    return out;
+}
 }  // namespace
 
 OptionsPanel::OptionsPanel(wxWindow* parent)
@@ -419,8 +461,26 @@ void OptionsPanel::relayout() {
 void OptionsPanel::configure(const DisplayInfo& info,
                              std::function<void(int, int, int)> onSetMode,
                              std::function<void()> onClose) {
+    kind_ = Kind::Display;
     info_ = info;
     onSetMode_ = std::move(onSetMode);
+    onClose_ = std::move(onClose);
+    rebuild();
+}
+
+void OptionsPanel::configureSettings(ThemeMode mode, bool autostartSupported,
+                                     bool autostartEnabled,
+                                     std::function<void(ThemeMode)> onSetTheme,
+                                     std::function<void()> onToggleAutostart,
+                                     std::function<void()> onExit,
+                                     std::function<void()> onClose) {
+    kind_ = Kind::Settings;
+    settingsMode_ = mode;
+    autostartSupported_ = autostartSupported;
+    autostartEnabled_ = autostartEnabled;
+    onSetTheme_ = std::move(onSetTheme);
+    onToggleAutostart_ = std::move(onToggleAutostart);
+    onExit_ = std::move(onExit);
     onClose_ = std::move(onClose);
     rebuild();
 }
@@ -445,7 +505,11 @@ void OptionsPanel::applyTheme() {
 void OptionsPanel::rebuild() {
     if (!content_) return;
     contentSizer_->Clear(/*delete_windows=*/true);
+    if (kind_ == Kind::Settings) rebuildSettings();
+    else rebuildDisplay();
+}
 
+void OptionsPanel::rebuildDisplay() {
     const Theme& th = theme();
     auto addLabel = [&](const wxString& text, int pt, wxFontWeight w, const wxColour& c) {
         auto* t = new wxStaticText(content_, wxID_ANY, text);
@@ -493,7 +557,7 @@ void OptionsPanel::rebuild() {
                        wxLEFT | wxRIGHT, 16);
     contentSizer_->AddSpacer(6);
     auto* resWrap = new wxWrapSizer(wxHORIZONTAL);
-    for (const auto& r : uniqueResolutions(info_.modes)) {
+    for (const auto& r : keepCommon(uniqueResolutions(info_.modes), info_.width, info_.height)) {
         const bool sel = (r.width == info_.width && r.height == info_.height);
         const int w = r.width, h = r.height;
         auto* chip = new Chip(content_, resolutionLabel(w, h), [this, w, h] {
@@ -517,7 +581,8 @@ void OptionsPanel::rebuild() {
                        wxLEFT | wxRIGHT, 16);
     contentSizer_->AddSpacer(6);
     auto* hzWrap = new wxWrapSizer(wxHORIZONTAL);
-    for (int hz : refreshRatesAt(info_.modes, info_.width, info_.height)) {
+    for (int hz : keepCommonHz(refreshRatesAt(info_.modes, info_.width, info_.height),
+                               info_.refreshHz)) {
         const bool sel = (hz == info_.refreshHz);
         const int w = info_.width, h = info_.height;
         auto* chip = new Chip(content_, wxString::Format("%d Hz", hz),
@@ -525,6 +590,71 @@ void OptionsPanel::rebuild() {
         hzWrap->Add(chip, 0, wxALL, 3);
     }
     contentSizer_->Add(hzWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, 13);
+
+    contentSizer_->AddStretchSpacer();
+    content_->Layout();
+}
+
+void OptionsPanel::rebuildSettings() {
+    const Theme& th = theme();
+    auto addLabel = [&](const wxString& text, int pt, wxFontWeight w, const wxColour& c) {
+        auto* t = new wxStaticText(content_, wxID_ANY, text);
+        t->SetFont(uiFont(pt, w));
+        t->SetForegroundColour(c);
+        return t;
+    };
+
+    contentSizer_->AddSpacer(16);
+
+    // Header: "Settings" + a Close chip, matching the display panel's layout.
+    auto* head = new wxBoxSizer(wxHORIZONTAL);
+    auto* nameLbl = new wxStaticText(content_, wxID_ANY, "Settings");
+    nameLbl->SetFont(uiFont(12, wxFONTWEIGHT_BOLD));
+    nameLbl->SetForegroundColour(th.textPrimary);
+    head->Add(nameLbl, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+    head->Add(new Chip(content_, "Close", [this] { if (onClose_) onClose_(); }), 0,
+              wxALIGN_CENTER_VERTICAL);
+    contentSizer_->Add(head, 0, wxEXPAND | wxLEFT | wxRIGHT, 16);
+
+    // Theme section: System / Light / Dark, radio-style like the resolution chips.
+    contentSizer_->AddSpacer(14);
+    contentSizer_->Add(addLabel("THEME", 8, wxFONTWEIGHT_BOLD, th.textGray), 0,
+                       wxLEFT | wxRIGHT, 16);
+    contentSizer_->AddSpacer(6);
+    auto* themeWrap = new wxWrapSizer(wxHORIZONTAL);
+    auto addThemeChip = [&](const wxString& label, ThemeMode mode) {
+        const bool sel = (settingsMode_ == mode);
+        auto* chip = new Chip(content_, label, [this, mode] {
+            if (onSetTheme_) onSetTheme_(mode);
+        }, sel);
+        themeWrap->Add(chip, 0, wxALL, 3);
+    };
+    addThemeChip("System", ThemeMode::System);
+    addThemeChip("Light", ThemeMode::Light);
+    addThemeChip("Dark", ThemeMode::Dark);
+    contentSizer_->Add(themeWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, 13);
+
+    // Autostart section: On / Off, only where launch-at-login is supported.
+    if (autostartSupported_) {
+        contentSizer_->AddSpacer(14);
+        contentSizer_->Add(addLabel("START WITH WINDOWS", 8, wxFONTWEIGHT_BOLD, th.textGray), 0,
+                           wxLEFT | wxRIGHT, 16);
+        contentSizer_->AddSpacer(6);
+        auto* wrap = new wxWrapSizer(wxHORIZONTAL);
+        auto* onChip = new Chip(content_, "On", [this] {
+            if (!autostartEnabled_ && onToggleAutostart_) onToggleAutostart_();
+        }, autostartEnabled_);
+        auto* offChip = new Chip(content_, "Off", [this] {
+            if (autostartEnabled_ && onToggleAutostart_) onToggleAutostart_();
+        }, !autostartEnabled_);
+        wrap->Add(onChip, 0, wxALL, 3);
+        wrap->Add(offChip, 0, wxALL, 3);
+        contentSizer_->Add(wrap, 0, wxEXPAND | wxLEFT | wxRIGHT, 13);
+    }
+
+    contentSizer_->AddSpacer(20);
+    contentSizer_->Add(new Chip(content_, "Exit App", [this] { if (onExit_) onExit_(); }), 0,
+                       wxLEFT | wxRIGHT, 16);
 
     contentSizer_->AddStretchSpacer();
     content_->Layout();

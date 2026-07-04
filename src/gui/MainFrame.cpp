@@ -10,19 +10,45 @@
 #include "../../resources/app.xpm"  // provides appicon_xpm
 #include "hdmi/Autostart.h"
 
+#ifdef __WXMSW__
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <dwmapi.h>
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+
+namespace {
+// SetPreferredAppMode/FlushMenuThemes are undocumented uxtheme.dll exports
+// (ordinals 135/136, stable since Windows 10 1809) that switch the classic
+// Win32 menu bar and its dropdowns to dark; there is no public API for this.
+enum PreferredAppMode { kDefault, kAllowDark, kForceDark, kForceLight, kMax };
+using SetPreferredAppModeFn = PreferredAppMode(WINAPI*)(PreferredAppMode);
+using FlushMenuThemesFn = void(WINAPI*)();
+
+void applyWin32MenuDarkMode(bool dark) {
+    static HMODULE uxtheme =
+        LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!uxtheme) return;
+    static auto setPreferredAppMode = reinterpret_cast<SetPreferredAppModeFn>(
+        GetProcAddress(uxtheme, MAKEINTRESOURCEA(135)));
+    static auto flushMenuThemes =
+        reinterpret_cast<FlushMenuThemesFn>(GetProcAddress(uxtheme, MAKEINTRESOURCEA(136)));
+    if (setPreferredAppMode) setPreferredAppMode(dark ? kForceDark : kForceLight);
+    if (flushMenuThemes) flushMenuThemes();
+}
+}  // namespace
+#endif
+
 using namespace hdmi::ui;
 
 namespace hdmi {
 
 namespace {
 enum {
-    ID_Refresh = wxID_HIGHEST + 1,
-    ID_ExtendBoth,
-    ID_DuplicateBoth,
-    ID_ToggleAutostart,
-    ID_ThemeSystem,
-    ID_ThemeLight,
-    ID_ThemeDark,
+    ID_Refresh = wxID_HIGHEST + 1,  // kept as an accelerator target (F5); no menu item owns it
 
     // Tray menu ids.
     ID_TrayOpen,
@@ -46,7 +72,15 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
       restConfig_(restConfig),
       pollTimer_(this) {
     SetIcon(wxICON(appicon));
-    buildMenu();
+
+    // No native menu bar (Windows can't theme its top strip dark; see the
+    // class comment). F5/Ctrl+Q still work via this accelerator table.
+    wxAcceleratorEntry accel[2];
+    accel[0].Set(wxACCEL_NORMAL, WXK_F5, ID_Refresh);
+    accel[1].Set(wxACCEL_CTRL, static_cast<int>('Q'), wxID_EXIT);
+    SetAcceleratorTable(wxAcceleratorTable(2, accel));
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { rebuildCards(); }, ID_Refresh);
+    Bind(wxEVT_MENU, [this](wxCommandEvent&) { Destroy(); }, wxID_EXIT);
 
     auto* leftCol = new wxBoxSizer(wxVERTICAL);
 
@@ -69,6 +103,8 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
     header->Add(new Chip(this, "Duplicate", [this] { applyTopology(Topology::Duplicate); }), 0,
                 wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
     header->Add(new Chip(this, "Refresh", [this] { rebuildCards(); }), 0,
+                wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+    header->Add(new Chip(this, "Settings", [this] { openSettings(); }), 0,
                 wxALIGN_CENTER_VERTICAL);
 
     leftCol->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 18);
@@ -124,7 +160,8 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
     tray_ = new TrayIcon(this);
     tray_->SetIcon(wxICON(appicon), "HDMI Selector");
 
-    // Closing the window hides to tray rather than exiting; use File > Exit to quit.
+    // Closing the window hides to tray rather than exiting; use Settings > Exit
+    // App (or the tray menu) to quit.
     Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& e) {
         if (e.CanVeto()) {
             Hide();
@@ -146,59 +183,6 @@ MainFrame::~MainFrame() {
     }
 }
 
-void MainFrame::buildMenu() {
-    auto* menuBar = new wxMenuBar();
-
-    auto* fileMenu = new wxMenu();
-    fileMenu->Append(ID_Refresh, "&Refresh\tF5", "Re-scan connected displays");
-    if (autostart::isSupported()) {
-        auto* item = fileMenu->AppendCheckItem(ID_ToggleAutostart, "Start with &Windows",
-                                               "Launch automatically at login (to the tray)");
-        item->Check(autostart::isEnabled());
-    }
-    fileMenu->AppendSeparator();
-    fileMenu->Append(wxID_EXIT, "E&xit\tCtrl+Q");
-    menuBar->Append(fileMenu, "&File");
-
-    // Extend / Duplicate are deliberately kept out of the main view - they are
-    // the rare alternatives to the default exclusive switch.
-    auto* advanced = new wxMenu();
-    advanced->Append(ID_ExtendBoth, "&Extend across all displays",
-                     "Use every connected display as one large desktop");
-    advanced->Append(ID_DuplicateBoth, "&Duplicate on all displays",
-                     "Mirror the same image on every connected display");
-    menuBar->Append(advanced, "&Advanced");
-
-    // View > Theme (System / Light / Dark), reflecting the current selection.
-    auto* view = new wxMenu();
-    auto* themeMenu = new wxMenu();
-    themeMenu->AppendRadioItem(ID_ThemeSystem, "&System", "Follow the OS light/dark setting");
-    themeMenu->AppendRadioItem(ID_ThemeLight, "&Light");
-    themeMenu->AppendRadioItem(ID_ThemeDark, "&Dark");
-    switch (ui::themeMode()) {
-        case ui::ThemeMode::System: themeMenu->Check(ID_ThemeSystem, true); break;
-        case ui::ThemeMode::Light: themeMenu->Check(ID_ThemeLight, true); break;
-        case ui::ThemeMode::Dark: themeMenu->Check(ID_ThemeDark, true); break;
-    }
-    view->AppendSubMenu(themeMenu, "&Theme");
-    menuBar->Append(view, "&View");
-
-    SetMenuBar(menuBar);
-
-    Bind(wxEVT_MENU, [this](wxCommandEvent&) { rebuildCards(); }, ID_Refresh);
-    // Real quit: stop vetoing close, then destroy.
-    Bind(wxEVT_MENU, [this](wxCommandEvent&) { Destroy(); }, wxID_EXIT);
-    Bind(wxEVT_MENU, [this](wxCommandEvent&) { applyTopology(Topology::Extend); },
-         ID_ExtendBoth);
-    Bind(wxEVT_MENU, [this](wxCommandEvent&) { applyTopology(Topology::Duplicate); },
-         ID_DuplicateBoth);
-    Bind(wxEVT_MENU, [this](wxCommandEvent&) { toggleAutostart(); }, ID_ToggleAutostart);
-    Bind(wxEVT_MENU, [this](wxCommandEvent&) { setTheme(ui::ThemeMode::System); },
-         ID_ThemeSystem);
-    Bind(wxEVT_MENU, [this](wxCommandEvent&) { setTheme(ui::ThemeMode::Light); }, ID_ThemeLight);
-    Bind(wxEVT_MENU, [this](wxCommandEvent&) { setTheme(ui::ThemeMode::Dark); }, ID_ThemeDark);
-}
-
 namespace {
 // Recursively repaint a window and all of its descendants.
 void refreshTree(wxWindow* w) {
@@ -216,6 +200,21 @@ void MainFrame::applyTheme() {
     if (statusText_) statusText_->SetForegroundColour(th.textGray);
     if (drawer_) drawer_->applyTheme();
     refreshTree(this);
+
+#ifdef __WXMSW__
+    // wxWidgets only paints the client area; the title bar is drawn by DWM
+    // and needs this explicit opt-in to switch to a dark caption.
+    BOOL dark = th.dark ? TRUE : FALSE;
+    HWND hwnd = static_cast<HWND>(GetHandle());
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+
+    // There's no frame menu bar to theme, but this also darkens the tray
+    // icon's right-click popup menu (a real Win32 popup, unlike a menu bar
+    // strip, so it does support dark mode via this opt-in).
+    applyWin32MenuDarkMode(th.dark);
+#endif
 }
 
 void MainFrame::setTheme(ui::ThemeMode mode) {
@@ -230,12 +229,6 @@ void MainFrame::toggleAutostart() {
     std::string err;
     if (!autostart::setEnabled(enable, &err)) {
         showError("Could not update startup setting: " + wxString::FromUTF8(err));
-    }
-    // Reflect the (possibly unchanged) real state back into the menu checkbox.
-    if (wxMenuBar* bar = GetMenuBar()) {
-        if (wxMenuItem* item = bar->FindItem(ID_ToggleAutostart)) {
-            item->Check(autostart::isEnabled());
-        }
     }
 }
 
@@ -340,6 +333,24 @@ void MainFrame::openOptionsFor(const std::string& id) {
     drawer_->open();
 }
 
+void MainFrame::openSettings() {
+    drawerId_.clear();
+    drawer_->configureSettings(
+        ui::themeMode(), autostart::isSupported(), autostart::isEnabled(),
+        [this](ui::ThemeMode mode) {
+            setTheme(mode);
+            // Rebuild after this event finishes: setTheme->applyTheme() would
+            // otherwise re-theme (but not re-select) the chip mid-click.
+            CallAfter([this] { openSettings(); });
+        },
+        [this] {
+            toggleAutostart();
+            CallAfter([this] { openSettings(); });
+        },
+        [this] { Destroy(); }, [this] { drawer_->close(); });
+    drawer_->open();
+}
+
 void MainFrame::changeMode(std::string id, int w, int h, int hz) {
     std::string err;
     if (!manager_.setMode(id, w, h, hz, &err)) {
@@ -360,7 +371,9 @@ void MainFrame::showError(const wxString& message) {
 // ---------------------------------------------------------------------------
 
 TrayIcon::TrayIcon(MainFrame* frame) : frame_(frame) {
-    Bind(wxEVT_TASKBAR_LEFT_DCLICK, &TrayIcon::onLeftDClick, this);
+    // A single left click restores the window (matches the common tray-icon
+    // convention on Windows); right click still shows the actions menu.
+    Bind(wxEVT_TASKBAR_LEFT_UP, &TrayIcon::onLeftUp, this);
 
     // A single handler dispatches every menu id to the right action.
     Bind(wxEVT_MENU, [this](wxCommandEvent& e) {
@@ -385,7 +398,7 @@ TrayIcon::TrayIcon(MainFrame* frame) : frame_(frame) {
     });
 }
 
-void TrayIcon::onLeftDClick(wxTaskBarIconEvent&) {
+void TrayIcon::onLeftUp(wxTaskBarIconEvent&) {
     frame_->Show(true);
     frame_->Raise();
 }

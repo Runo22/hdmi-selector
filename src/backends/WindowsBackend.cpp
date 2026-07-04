@@ -129,6 +129,38 @@ int currentHz(const std::wstring& gdi) {
     return 0;
 }
 
+// The target's EDID-reported preferred (native) resolution.
+bool queryPreferredSize(const DISPLAYCONFIG_PATH_INFO& path, int* width, int* height) {
+    DISPLAYCONFIG_TARGET_PREFERRED_MODE pref = {};
+    pref.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_PREFERRED_MODE;
+    pref.header.size = sizeof(pref);
+    pref.header.adapterId = path.targetInfo.adapterId;
+    pref.header.id = path.targetInfo.id;
+    if (DisplayConfigGetDeviceInfo(&pref.header) != ERROR_SUCCESS) return false;
+    *width = static_cast<int>(pref.width);
+    *height = static_cast<int>(pref.height);
+    return *width > 0 && *height > 0;
+}
+
+// enumModes(), capped to sizes at or below the monitor's native resolution.
+// GPU drivers commonly enumerate extra "custom resolution" timings (e.g. 4K)
+// that the physically attached monitor can't actually display; the
+// EDID-reported preferred mode is what the monitor itself claims to support.
+std::vector<DisplayMode> supportedModes(const std::wstring& gdi,
+                                        const DISPLAYCONFIG_PATH_INFO& path) {
+    std::vector<DisplayMode> result = enumModes(gdi);
+    int prefW = 0, prefH = 0;
+    if (queryPreferredSize(path, &prefW, &prefH)) {
+        const long capPixels = static_cast<long>(prefW) * prefH;
+        result.erase(std::remove_if(result.begin(), result.end(),
+                                    [&](const DisplayMode& m) {
+                                        return static_cast<long>(m.width) * m.height > capPixels;
+                                    }),
+                    result.end());
+    }
+    return result;
+}
+
 }  // namespace
 
 std::vector<DisplayInfo> WindowsBackend::list() {
@@ -168,7 +200,7 @@ std::vector<DisplayInfo> WindowsBackend::list() {
         if (info.active) {
             std::wstring gdi = sourceGdiName(p);
             if (!gdi.empty()) {
-                info.modes = enumModes(gdi);
+                info.modes = supportedModes(gdi, p);
                 info.refreshHz = currentHz(gdi);
             }
         }
@@ -254,18 +286,20 @@ bool WindowsBackend::setMode(const std::string& id, int width, int height, int h
 
     // The mode APIs act on the GDI device of the currently-active source.
     std::wstring gdi;
+    const DISPLAYCONFIG_PATH_INFO* activePath = nullptr;
     for (const auto& p : paths) {
         if (pathActive(p) && queryTarget(p).devicePath == id) {
             gdi = sourceGdiName(p);
+            activePath = &p;
             break;
         }
     }
-    if (gdi.empty()) return fail("display is not active: " + id);
+    if (gdi.empty() || !activePath) return fail("display is not active: " + id);
 
     // Resolve hz<=0 to the highest rate available at this resolution.
     int freq = hz;
     if (freq <= 0) {
-        for (const auto& m : enumModes(gdi)) {
+        for (const auto& m : supportedModes(gdi, *activePath)) {
             if (m.width == width && m.height == height) freq = std::max(freq, m.hz);
         }
         if (freq <= 0) return fail("resolution not supported by this display");

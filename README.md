@@ -8,20 +8,24 @@ Windows drives.
 * **Primary action — exclusive switch:** click a display and it becomes the
   *only* active screen (the other turns off). This is the 99% use case.
 * **Advanced alternatives:** *Extend* (one big desktop across both) and
-  *Duplicate* (mirror the same image) live in the **Advanced** menu so they
+  *Duplicate* (mirror the same image) are secondary header chips so they
   don't clutter the main view.
 * **Clear naming:** displays show their monitor name and connector; when several
   share a connector type they're numbered (**HDMI 1**, **HDMI 2**). Long names
   are ellipsized so they never overflow the card or panel.
-* **System-tray control:** a tray icon with a right-click menu lets you switch
-  displays (and reach the Advanced modes) without opening the window. Closing
-  the window hides to the tray; quit from **File → Exit** or the tray menu.
+* **System-tray control:** a tray icon lets you switch displays (and reach the
+  Advanced modes) without opening the window — click it to open the window, or
+  right-click for a menu. Closing the window hides to the tray; quit from the
+  **Settings** panel's *Exit App* or the tray menu.
 * **Live control center:** the app polls the display configuration and
   refreshes automatically when a display is plugged in/out or changed
   elsewhere, so the view always reflects reality.
-* **Light / dark theme:** **View → Theme** offers System (follows the OS
-  light/dark setting and updates live), Light, or Dark. The choice is
-  remembered; `HDMI_THEME=system|light|dark` overrides it for one run.
+* **Light / dark theme:** the **Settings** panel's Theme chips offer System
+  (follows the OS light/dark setting and updates live), Light, or Dark. There
+  is no native Windows menu bar, since Windows can't theme it dark; app
+  settings live in the same custom-drawn side panel used for per-display
+  resolution/refresh options. The choice is remembered;
+  `HDMI_THEME=system|light|dark` overrides it for one run.
 * **Resolution & refresh rate:** each active card shows its current resolution
   and refresh (e.g. `1920 × 1080 · 144 Hz`). Click the **•••** on a card (or
   right-click it) to slide out a side panel with **Resolution** (common ones
@@ -36,8 +40,8 @@ Windows drives.
 
 ## Run at startup (not a service)
 
-Enable **File → "Start with Windows"** (also in the tray menu) to launch the app
-automatically at login, straight to the tray.
+Enable **"Start with Windows"** in the Settings panel (also in the tray menu)
+to launch the app automatically at login, straight to the tray.
 
 This is deliberately a **login-time app, not a Windows service.** Services run in
 the non-interactive Session 0, where they can neither change the desktop's

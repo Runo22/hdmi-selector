@@ -66,8 +66,9 @@ private:
 // Friendly label for common resolutions: "1080p", "2K", "4K", ... else WxH.
 wxString resolutionLabel(int width, int height);
 
-// A themed, collapsible side panel that slides in from the right and lets the
-// user pick a resolution and refresh rate from the display's supported modes.
+// A themed, collapsible side panel that slides in from the right. Shows
+// either a display's resolution/refresh-rate picker or the app's settings
+// (theme, autostart, exit), depending on which `configure*` call populated it.
 class OptionsPanel : public wxPanel {
 public:
     explicit OptionsPanel(wxWindow* parent);
@@ -75,6 +76,13 @@ public:
     // Populate for a display. onSetMode(w,h,hz): hz>0 exact, 0 = best at size.
     void configure(const DisplayInfo& info, std::function<void(int, int, int)> onSetMode,
                    std::function<void()> onClose);
+
+    // Populate for the app-settings panel (theme picker + autostart + exit).
+    void configureSettings(ThemeMode mode, bool autostartSupported, bool autostartEnabled,
+                           std::function<void(ThemeMode)> onSetTheme,
+                           std::function<void()> onToggleAutostart, std::function<void()> onExit,
+                           std::function<void()> onClose);
+
     void open();       // animate into view
     void close();      // animate out, then hide
     bool isOpen() const { return targetWidth_ > 0; }
@@ -83,13 +91,29 @@ public:
     static constexpr int kFullWidth = 236;
 
 private:
+    enum class Kind { Display, Settings };
+
     void rebuild();
+    void rebuildDisplay();
+    void rebuildSettings();
     void relayout();
 
     wxPanel* content_ = nullptr;
     wxBoxSizer* contentSizer_ = nullptr;
+    Kind kind_ = Kind::Display;
+
+    // Display-mode picker state.
     DisplayInfo info_;
     std::function<void(int, int, int)> onSetMode_;
+
+    // Settings-panel state.
+    ThemeMode settingsMode_ = ThemeMode::System;
+    bool autostartSupported_ = false;
+    bool autostartEnabled_ = false;
+    std::function<void(ThemeMode)> onSetTheme_;
+    std::function<void()> onToggleAutostart_;
+    std::function<void()> onExit_;
+
     std::function<void()> onClose_;
     wxTimer anim_;
     double width_ = 0.0;
