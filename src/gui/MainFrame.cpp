@@ -3,6 +3,7 @@
 #include <wx/config.h>
 #include <wx/menu.h>
 
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -11,11 +12,19 @@
 #include "hdmi/Autostart.h"
 
 #ifdef __WXMSW__
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// winsock2.h must precede windows.h (and iphlpapi.h needs it) to avoid the
+// classic winsock.h/winsock2.h redefinition conflict.
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <dwmapi.h>
+#include <iphlpapi.h>
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
@@ -38,6 +47,48 @@ void applyWin32MenuDarkMode(bool dark) {
         reinterpret_cast<FlushMenuThemesFn>(GetProcAddress(uxtheme, MAKEINTRESOURCEA(136)));
     if (setPreferredAppMode) setPreferredAppMode(dark ? kForceDark : kForceLight);
     if (flushMenuThemes) flushMenuThemes();
+}
+
+// Non-loopback IPv4 address of an "up" adapter - the address a phone on the
+// same LAN would actually use, as opposed to the literal bind address
+// "0.0.0.0" (which means "all interfaces", not a reachable address itself).
+// Prefers the adapter Windows would use to reach the internet/gateway (via
+// GetBestInterface), so a Hyper-V/VPN/virtual adapter that also happens to
+// be "up" doesn't get shown instead of the real LAN one.
+std::string firstLanIPv4() {
+    ULONG bufLen = 15000;
+    std::vector<unsigned char> buf(bufLen);
+    auto* addresses = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buf.data());
+    const ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    DWORD rc = GetAdaptersAddresses(AF_INET, flags, nullptr, addresses, &bufLen);
+    if (rc == ERROR_BUFFER_OVERFLOW) {
+        buf.resize(bufLen);
+        addresses = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buf.data());
+        rc = GetAdaptersAddresses(AF_INET, flags, nullptr, addresses, &bufLen);
+    }
+    if (rc != NO_ERROR) return "";
+
+    IN_ADDR probe{};
+    inet_pton(AF_INET, "8.8.8.8", &probe);
+    DWORD bestIndex = 0;
+    const bool haveBest = GetBestInterface(probe.S_un.S_addr, &bestIndex) == NO_ERROR;
+
+    std::string fallback;
+    for (auto* a = addresses; a; a = a->Next) {
+        if (a->OperStatus != IfOperStatusUp) continue;
+        if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+        for (auto* ua = a->FirstUnicastAddress; ua; ua = ua->Next) {
+            auto* sa = reinterpret_cast<sockaddr_in*>(ua->Address.lpSockaddr);
+            if (sa->sin_family != AF_INET) continue;
+            char ip[INET_ADDRSTRLEN] = {};
+            if (!inet_ntop(AF_INET, &sa->sin_addr, ip, sizeof(ip)) || !std::strcmp(ip, "127.0.0.1")) {
+                continue;
+            }
+            if (haveBest && a->IfIndex == bestIndex) return ip;
+            if (fallback.empty()) fallback = ip;
+        }
+    }
+    return fallback;
 }
 }  // namespace
 #endif
@@ -118,7 +169,10 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
     // ---- Footer: subtle REST status with a live dot ----
     statusText_ = new wxStaticText(this, wxID_ANY, "");
     statusText_->SetFont(uiFont(8));
-    leftCol->Add(statusText_, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM | wxTOP, 16);
+    // Same 18px side inset as the header so the footer's left edge lines up
+    // with the "Displays" title above it.
+    leftCol->Add(statusText_, 0, wxEXPAND | wxLEFT | wxRIGHT, 18);
+    leftCol->AddSpacer(16);
 
     // Collapsible options drawer on the right; hidden until a card's ••• is used.
     drawer_ = new ui::OptionsPanel(this);
@@ -142,7 +196,16 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
     // through wxString::Format is locale-dependent and unsafe.
     server_ = std::make_unique<RestServer>(manager_, restConfig_);
     if (server_->start()) {
-        const std::string s = "\xE2\x97\x8F  REST API  \xC2\xB7  http://" + restConfig_.host +
+        // "0.0.0.0" means "all interfaces", not an address a phone can
+        // actually use - show the real LAN IP instead when bound that way.
+        std::string shownHost = restConfig_.host;
+#ifdef __WXMSW__
+        if (shownHost == "0.0.0.0") {
+            const std::string lan = firstLanIPv4();
+            if (!lan.empty()) shownHost = lan;
+        }
+#endif
+        const std::string s = "\xE2\x97\x8F  REST API  \xC2\xB7  http://" + shownHost +
                               ":" + std::to_string(restConfig_.port) + "  \xC2\xB7  backend: " +
                               manager_.backendName();
         statusText_->SetLabel(wxString::FromUTF8(s));

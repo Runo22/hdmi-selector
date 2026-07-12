@@ -69,7 +69,12 @@ if(HDMI_BUILD_GUI)
         add_executable(hdmi_gui WIN32 ${GUI_SOURCES})
         target_link_libraries(hdmi_gui PRIVATE hdmi_core ${wxWidgets_LIBRARIES})
         if(WIN32)
-            target_link_libraries(hdmi_gui PRIVATE dwmapi)  # DwmSetWindowAttribute (dark title bar)
+            # dwmapi: DwmSetWindowAttribute (dark title bar). iphlpapi: LAN IP
+            # lookup for the status line. /MANIFEST:NO: our own manifest is
+            # already embedded via app.rc (resource ID 1); without this the
+            # linker tries to generate/merge a second one at the same ID.
+            target_link_libraries(hdmi_gui PRIVATE dwmapi iphlpapi)
+            set_target_properties(hdmi_gui PROPERTIES LINK_FLAGS "/MANIFEST:NO")
         endif()
         message(STATUS "wxWidgets found - building hdmi_gui")
 
