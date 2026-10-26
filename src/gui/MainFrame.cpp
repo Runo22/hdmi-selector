@@ -3,6 +3,7 @@
 #include <wx/config.h>
 #include <wx/menu.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -111,6 +112,13 @@ enum {
 };
 
 constexpr int kPollIntervalMs = 1500;       // display-change detection cadence
+
+// Window geometry in DIPs (resolved per-monitor via FromDIP), so the window
+// keeps the same physical size and proportions on any display/scaling.
+constexpr int kInitialW = 620;
+constexpr int kInitialH = 340;
+constexpr int kMinW = 520;
+constexpr int kMinH = 300;
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -118,7 +126,7 @@ constexpr int kPollIntervalMs = 1500;       // display-change detection cadence
 // ---------------------------------------------------------------------------
 
 MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
-    : wxFrame(nullptr, wxID_ANY, "HDMI Selector", wxDefaultPosition, wxSize(620, 340)),
+    : wxFrame(nullptr, wxID_ANY, "HDMI Selector", wxDefaultPosition, wxDefaultSize),
       manager_(manager),
       restConfig_(restConfig),
       pollTimer_(this) {
@@ -140,39 +148,36 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
 
     auto* titles = new wxBoxSizer(wxVERTICAL);
     title_ = new wxStaticText(this, wxID_ANY, "Displays");
-    title_->SetFont(uiFont(16, wxFONTWEIGHT_BOLD));
     subtitle_ = new wxStaticText(this, wxID_ANY, "Choose the screen you want to use");
-    subtitle_->SetFont(uiFont(9));
     titles->Add(title_);
-    titles->Add(subtitle_, 0, wxTOP, 2);
+    titles->Add(subtitle_, 0, wxTOP, FromDIP(2));
 
     header->Add(titles, 1, wxALIGN_CENTER_VERTICAL);
     header->AddStretchSpacer();
     // Secondary options live here as small chips instead of buried in a menu.
     header->Add(new Chip(this, "Extend", [this] { applyTopology(Topology::Extend); }), 0,
-                wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+                wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
     header->Add(new Chip(this, "Duplicate", [this] { applyTopology(Topology::Duplicate); }), 0,
-                wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+                wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
     header->Add(new Chip(this, "Refresh", [this] { rebuildCards(); }), 0,
-                wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+                wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
     header->Add(new Chip(this, "Settings", [this] { openSettings(); }), 0,
                 wxALIGN_CENTER_VERTICAL);
 
-    leftCol->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 18);
+    leftCol->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(18));
 
     // ---- Card row (cards are centred within this panel) ----
     cardRow_ = new wxPanel(this, wxID_ANY);
     cardSizer_ = new wxBoxSizer(wxHORIZONTAL);
     cardRow_->SetSizer(cardSizer_);
-    leftCol->Add(cardRow_, 1, wxEXPAND | wxLEFT | wxRIGHT, 14);
+    leftCol->Add(cardRow_, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(14));
 
     // ---- Footer: subtle REST status with a live dot ----
     statusText_ = new wxStaticText(this, wxID_ANY, "");
-    statusText_->SetFont(uiFont(8));
-    // Same 18px side inset as the header so the footer's left edge lines up
+    // Same 18 DIP side inset as the header so the footer's left edge lines up
     // with the "Displays" title above it.
-    leftCol->Add(statusText_, 0, wxEXPAND | wxLEFT | wxRIGHT, 18);
-    leftCol->AddSpacer(16);
+    leftCol->Add(statusText_, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(18));
+    leftCol->AddSpacer(FromDIP(16));
 
     // Collapsible options drawer on the right; hidden until a card's ••• is used.
     drawer_ = new ui::OptionsPanel(this);
@@ -181,6 +186,21 @@ MainFrame::MainFrame(DisplayManager& manager, const RestConfig& restConfig)
     outer->Add(leftCol, 1, wxEXPAND);
     outer->Add(drawer_, 0, wxEXPAND);
     SetSizer(outer);
+
+    // Size in DIPs, resolved for whichever monitor the window opened on, and
+    // floored so the layout can never be squashed below what it needs.
+    dpiScale_ = ui::dpiScale(this);
+    applyFonts();
+    SetMinSize(FromDIP(wxSize(kMinW, kMinH)));
+    SetSize(FromDIP(wxSize(kInitialW, kInitialH)));
+    Centre();
+
+    // Landing on a monitor with different scaling changes every FromDIP()
+    // value, so everything DIP-derived has to be re-resolved.
+    Bind(wxEVT_DPI_CHANGED, [this](wxDPIChangedEvent& e) {
+        applyDpiChange();
+        e.Skip();
+    });
 
     // Re-follow the OS when it flips light/dark, if we're in System mode.
     Bind(wxEVT_SYS_COLOUR_CHANGED, [this](wxSysColourChangedEvent& e) {
@@ -254,6 +274,45 @@ void refreshTree(wxWindow* w) {
 }
 }  // namespace
 
+namespace {
+// Widgets cache their min size at construction, so after a DPI change every
+// custom-drawn one has to be told to re-measure itself.
+void updateTreeForDPI(wxWindow* w) {
+    if (auto* chip = dynamic_cast<ui::Chip*>(w)) chip->updateForDPI();
+    else if (auto* card = dynamic_cast<ui::DisplayCard*>(w)) card->updateForDPI();
+    for (wxWindow* child : w->GetChildren()) updateTreeForDPI(child);
+}
+}  // namespace
+
+void MainFrame::applyDpiChange() {
+    dpiScale_ = ui::dpiScale(this);
+
+    applyFonts();
+    SetMinSize(FromDIP(wxSize(kMinW, kMinH)));
+    updateTreeForDPI(this);
+    if (drawer_) drawer_->applyTheme();  // rebuilds its chips at the new scale
+    rebuildCards();
+
+    // Windows already resizes the window itself when the DPI changes, so only
+    // enforce the (newly rescaled) minimum here - scaling the size again on
+    // top of that would compound into a window several times too large.
+    const wxSize cur = GetSize();
+    const wxSize minSz = FromDIP(wxSize(kMinW, kMinH));
+    if (cur.GetWidth() < minSz.GetWidth() || cur.GetHeight() < minSz.GetHeight()) {
+        SetSize(wxSize(std::max(cur.GetWidth(), minSz.GetWidth()),
+                       std::max(cur.GetHeight(), minSz.GetHeight())));
+    }
+
+    Layout();
+    refreshTree(this);
+}
+
+void MainFrame::applyFonts() {
+    if (title_) title_->SetFont(uiFont(16, wxFONTWEIGHT_BOLD));
+    if (subtitle_) subtitle_->SetFont(uiFont(9));
+    if (statusText_) statusText_->SetFont(uiFont(8));
+}
+
 void MainFrame::applyTheme() {
     const Theme& th = theme();
     SetBackgroundColour(th.windowBg);
@@ -306,6 +365,14 @@ std::string MainFrame::signatureOf(const std::vector<DisplayInfo>& displays) {
 }
 
 void MainFrame::refreshIfChanged() {
+    // Switching displays exclusively can move this window onto a monitor with
+    // different scaling without Windows sending WM_DPICHANGED (the old monitor
+    // is switched off rather than the window being dragged), so check the
+    // scale factor here too rather than relying on that event alone.
+    if (ui::dpiScale(this) != dpiScale_) {
+        applyDpiChange();
+        return;  // applyDpiChange() rebuilds the cards itself
+    }
     const std::string sig = signatureOf(manager_.displays());
     if (sig != lastSignature_) {
         rebuildCards();  // updates lastSignature_
@@ -325,14 +392,14 @@ void MainFrame::rebuildCards() {
         auto* empty = new wxStaticText(cardRow_, wxID_ANY, "No displays detected");
         empty->SetFont(uiFont(10));
         empty->SetForegroundColour(theme().textGray);
-        cardSizer_->Add(empty, 0, wxALIGN_CENTER_VERTICAL | wxALL, 12);
+        cardSizer_->Add(empty, 0, wxALIGN_CENTER_VERTICAL | wxALL, FromDIP(12));
     }
     bool drawerDisplayActive = false;
     for (const auto& d : displays) {
         const std::string id = d.id;
         auto* card = new DisplayCard(cardRow_, d, [this, id] { switchExclusive(id); },
                                      [this, id] { openOptionsFor(id); });
-        cardSizer_->Add(card, 0, wxALIGN_CENTER_VERTICAL | wxALL, 8);
+        cardSizer_->Add(card, 0, wxALIGN_CENTER_VERTICAL | wxALL, FromDIP(8));
         if (id == drawerId_ && d.active) drawerDisplayActive = true;
     }
     cardSizer_->AddStretchSpacer();

@@ -117,6 +117,16 @@ wxFont uiFont(int pointSize, wxFontWeight weight) {
     return f;
 }
 
+double dpiScale(const wxWindow* window) {
+    // Taken from the window's own DPI rather than GetDPIScaleFactor() so it is
+    // guaranteed to agree with FromDIP(). Fonts are deliberately *not* scaled
+    // by this: wxWidgets already resolves a point size against the window's
+    // DPI, and scaling them here again would compound to a huge size.
+    if (!window) return 1.0;
+    const int dpi = window->GetDPI().y;
+    return dpi > 0 ? dpi / 96.0 : 1.0;
+}
+
 wxString resolutionLabel(int width, int height) {
     return wxString::FromUTF8(hdmi::resolutionLabel(width, height));
 }
@@ -125,16 +135,25 @@ wxString resolutionLabel(int width, int height) {
 // DisplayCard
 // ---------------------------------------------------------------------------
 
+// Card size in DIPs. Every drawing constant below is likewise expressed in
+// DIPs and multiplied by the window's DPI scale factor at paint time, so the
+// card keeps its exact proportions whichever monitor it lands on.
+namespace {
+constexpr int kCardW = 172;
+constexpr int kCardH = 164;
+}  // namespace
+
 DisplayCard::DisplayCard(wxWindow* parent, const DisplayInfo& info,
                          std::function<void()> onActivate, std::function<void()> onOptions)
-    : wxWindow(parent, wxID_ANY, wxDefaultPosition, wxSize(172, 164)),
+    : wxWindow(parent, wxID_ANY, wxDefaultPosition,
+               wxWindow::FromDIP(wxSize(kCardW, kCardH), parent)),
       info_(info),
       onActivate_(std::move(onActivate)),
       onOptions_(std::move(onOptions)),
       anim_(this) {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
     SetCursor(wxCursor(wxCURSOR_HAND));
-    SetMinSize(wxSize(172, 164));
+    updateForDPI();
 
     Bind(wxEVT_PAINT, &DisplayCard::onPaint, this);
     Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent&) { animateTo(1.0); });
@@ -155,14 +174,20 @@ DisplayCard::DisplayCard(wxWindow* parent, const DisplayInfo& info,
     });
 }
 
+void DisplayCard::updateForDPI() {
+    SetMinSize(FromDIP(wxSize(kCardW, kCardH)));
+    SetSize(GetMinSize());
+    Refresh();
+}
+
 void DisplayCard::animateTo(double target) {
     hoverTarget_ = target;
     if (!anim_.IsRunning()) anim_.Start(16);
 }
 
 wxRect DisplayCard::optionsHotspot() const {
-    const wxSize sz = GetClientSize();
-    return wxRect(sz.GetWidth() - 40, 2, 34, 34);  // top-right corner
+    const wxSize sz = GetClientSize();  // top-right corner
+    return wxRect(sz.GetWidth() - FromDIP(40), FromDIP(2), FromDIP(34), FromDIP(34));
 }
 
 void DisplayCard::onLeftUp(wxMouseEvent& e) {
@@ -176,18 +201,18 @@ void DisplayCard::onLeftUp(wxMouseEvent& e) {
 }
 
 void DisplayCard::drawGlyph(wxGraphicsContext* gc, double cx, double top,
-                            const wxColour& colour) {
-    const double sw = 48, sh = 30;  // screen
+                            const wxColour& colour, double s) {
+    const double sw = 48 * s, sh = 30 * s;  // screen
     gc->SetBrush(wxBrush(colour));
     gc->SetPen(*wxTRANSPARENT_PEN);
-    gc->DrawRoundedRectangle(cx - sw / 2, top, sw, sh, 4);
+    gc->DrawRoundedRectangle(cx - sw / 2, top, sw, sh, 4 * s);
     // Neck + base of the stand.
-    gc->DrawRectangle(cx - 4, top + sh, 8, 6);
-    gc->DrawRoundedRectangle(cx - 12, top + sh + 6, 24, 4, 2);
+    gc->DrawRectangle(cx - 4 * s, top + sh, 8 * s, 6 * s);
+    gc->DrawRoundedRectangle(cx - 12 * s, top + sh + 6 * s, 24 * s, 4 * s, 2 * s);
     // A lighter "screen" inset for a bit of depth.
     wxColour inset(colour.Red(), colour.Green(), colour.Blue(), 90);
     gc->SetBrush(wxBrush(inset));
-    gc->DrawRoundedRectangle(cx - sw / 2 + 4, top + 4, sw - 8, sh - 8, 2);
+    gc->DrawRoundedRectangle(cx - sw / 2 + 4 * s, top + 4 * s, sw - 8 * s, sh - 8 * s, 2 * s);
 }
 
 void DisplayCard::onPaint(wxPaintEvent&) {
@@ -202,18 +227,19 @@ void DisplayCard::onPaint(wxPaintEvent&) {
     gc->SetAntialiasMode(wxANTIALIAS_DEFAULT);
 
     const wxSize sz = GetClientSize();
+    const double s = dpiScale(this);  // every constant below is in DIPs
     const double t = ease(hover_);       // eased hover amount
-    const double r = 14;
-    const double mx = 6;                 // side margin
-    const double top = 6 - 3.0 * t;      // card rises up to 3px on hover
+    const double r = 14 * s;
+    const double mx = 6 * s;             // side margin
+    const double top = (6 - 3.0 * t) * s;  // card rises up to 3 DIPs on hover
     const double w = sz.GetWidth() - 2 * mx;
-    const double h = sz.GetHeight() - 12 - 6;  // leave room below for shadow
+    const double h = sz.GetHeight() - 18 * s;  // leave room below for shadow
     const double cx = sz.GetWidth() / 2.0;
     const bool active = info_.active;
 
     // Soft drop shadow that deepens as the card lifts.
     const int shadowAlpha = th.shadowAlpha + static_cast<int>(22 * t);
-    const double shadowOff = 2 + 5.0 * t;
+    const double shadowOff = (2 + 5.0 * t) * s;
     gc->SetBrush(wxBrush(wxColour(0, 0, 0, shadowAlpha)));
     gc->SetPen(*wxTRANSPARENT_PEN);
     gc->DrawRoundedRectangle(mx, top + shadowOff, w, h, r);
@@ -222,37 +248,37 @@ void DisplayCard::onPaint(wxPaintEvent&) {
     wxColour body = active ? th.accentSoft : lerpColour(th.cardBg, th.cardHover, t);
     gc->SetBrush(wxBrush(body));
     wxColour border = active ? th.accent : lerpColour(th.cardBorder, th.accent, t);
-    gc->SetPen(wxPen(border, active ? 2.0 : 1.0 + t));
+    gc->SetPen(wxPen(border, (active ? 2.0 : 1.0 + t) * s));
     gc->DrawRoundedRectangle(mx, top, w, h, r);
 
     // Monitor glyph.
-    drawGlyph(gc.get(), cx, top + 16, active ? th.accent : th.glyphInactive);
+    drawGlyph(gc.get(), cx, top + 16 * s, active ? th.accent : th.glyphInactive, s);
 
     // Active check badge (top-left, clear of the centred text and the ••• menu).
     if (active) {
-        const double bx = mx + 16, by = top + 14, br = 9;
+        const double bx = mx + 16 * s, by = top + 14 * s, br = 9 * s;
         gc->SetBrush(wxBrush(th.accent));
         gc->SetPen(*wxTRANSPARENT_PEN);
         gc->DrawEllipse(bx - br, by - br, br * 2, br * 2);
         wxGraphicsPath tick = gc->CreatePath();
-        tick.MoveToPoint(bx - 4, by);
-        tick.AddLineToPoint(bx - 1, by + 3);
-        tick.AddLineToPoint(bx + 4, by - 3);
-        gc->SetPen(wxPen(th.badgeText, 2));
+        tick.MoveToPoint(bx - 4 * s, by);
+        tick.AddLineToPoint(bx - 1 * s, by + 3 * s);
+        tick.AddLineToPoint(bx + 4 * s, by - 3 * s);
+        gc->SetPen(wxPen(th.badgeText, 2 * s));
         gc->StrokePath(tick);
     }
 
     // Text block. Backend strings are UTF-8, so decode them explicitly. The
     // name is ellipsized so a long monitor name can't overflow the card.
     const wxFont nameFont = uiFont(12, wxFONTWEIGHT_BOLD);
-    wxString name = ellipsize(gc.get(), wxString::FromUTF8(info_.name), nameFont, w - 20);
-    centeredText(gc.get(), name, nameFont, th.textPrimary, cx, top + 74);
+    wxString name = ellipsize(gc.get(), wxString::FromUTF8(info_.name), nameFont, w - 20 * s);
+    centeredText(gc.get(), name, nameFont, th.textPrimary, cx, top + 74 * s);
 
     const std::string& conn =
         !info_.connectorLabel.empty() ? info_.connectorLabel : info_.connector;
     if (!conn.empty()) {
-        centeredText(gc.get(), wxString::FromUTF8(conn).Upper(), uiFont(8), th.textGray, cx,
-                     top + 96);
+        centeredText(gc.get(), wxString::FromUTF8(conn).Upper(), uiFont(8), th.textGray,
+                     cx, top + 96 * s);
     }
 
     wxString sub;
@@ -265,18 +291,19 @@ void DisplayCard::onPaint(wxPaintEvent&) {
         sub = "Tap to activate";
     }
     if (!sub.empty()) {
-        centeredText(gc.get(), sub, uiFont(8), active ? th.accent : th.textGray, cx, top + 116);
+        centeredText(gc.get(), sub, uiFont(8), active ? th.accent : th.textGray, cx,
+                     top + 116 * s);
     }
 
     // Options affordance ("•••") top-right on active cards that have adjustable
     // modes to offer.
     if (active && !info_.modes.empty()) {
-        const double dotY = top + 14;
-        const double dotCx = sz.GetWidth() - mx - 16;
+        const double dotY = top + 14 * s;
+        const double dotCx = sz.GetWidth() - mx - 16 * s;
         gc->SetBrush(wxBrush(th.textGray));
         gc->SetPen(*wxTRANSPARENT_PEN);
         for (int i = -1; i <= 1; ++i) {
-            gc->DrawEllipse(dotCx + i * 6 - 1.5, dotY - 1.5, 3, 3);
+            gc->DrawEllipse(dotCx + (i * 6 - 1.5) * s, dotY - 1.5 * s, 3 * s, 3 * s);
         }
     }
 }
@@ -286,23 +313,31 @@ void DisplayCard::onPaint(wxPaintEvent&) {
 // ---------------------------------------------------------------------------
 
 Chip::Chip(wxWindow* parent, const wxString& label, std::function<void()> onClick, bool filled)
-    : wxWindow(parent, wxID_ANY, wxDefaultPosition, wxSize(-1, 30)),
+    : wxWindow(parent, wxID_ANY, wxDefaultPosition,
+               wxSize(-1, wxWindow::FromDIP(30, parent))),
       label_(label),
       onClick_(std::move(onClick)),
       filled_(filled) {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
     SetCursor(wxCursor(wxCURSOR_HAND));
 
-    // Size to fit the label plus horizontal padding.
-    wxClientDC dc(this);
-    dc.SetFont(uiFont(9, wxFONTWEIGHT_MEDIUM));
-    wxSize ext = dc.GetTextExtent(label_);
-    SetMinSize(wxSize(ext.GetWidth() + 28, 30));
+    updateForDPI();
 
     Bind(wxEVT_PAINT, &Chip::onPaint, this);
     Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent&) { hover_ = true; Refresh(); });
     Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent&) { hover_ = false; Refresh(); });
     Bind(wxEVT_LEFT_UP, [this](wxMouseEvent&) { if (onClick_) onClick_(); });
+}
+
+void Chip::updateForDPI() {
+    // Measure with the same DPI-scaled font onPaint() draws with, so the chip
+    // can't end up too narrow for its own text on a higher-scaling monitor.
+    wxClientDC dc(this);
+    dc.SetFont(uiFont(9, wxFONTWEIGHT_MEDIUM));
+    const wxSize ext = dc.GetTextExtent(label_);
+    SetMinSize(wxSize(ext.GetWidth() + FromDIP(28), FromDIP(30)));
+    SetSize(GetMinSize());
+    Refresh();
 }
 
 void Chip::onPaint(wxPaintEvent&) {
@@ -331,9 +366,10 @@ void Chip::onPaint(wxPaintEvent&) {
         border = hover_ ? t.accent : t.cardBorder;
     }
 
+    const double s = dpiScale(this);
     gc->SetBrush(wxBrush(bg));
-    gc->SetPen(wxPen(border, 1));
-    gc->DrawRoundedRectangle(0.5, 0.5, sz.GetWidth() - 1, sz.GetHeight() - 1, r);
+    gc->SetPen(wxPen(border, s));
+    gc->DrawRoundedRectangle(s / 2, s / 2, sz.GetWidth() - s, sz.GetHeight() - s, r);
 
     gc->SetFont(uiFont(9, wxFONTWEIGHT_MEDIUM), fg);
     double tw = 0, th = 0, d = 0, e = 0;
@@ -444,8 +480,8 @@ void OptionsPanel::relayout() {
     if (!content_) return;
     const wxSize sz = GetClientSize();
     // Pin the fixed-width content to the right edge so it slides in/out.
-    content_->SetSize(kFullWidth, sz.GetHeight());
-    content_->Move(sz.GetWidth() - kFullWidth, 0);
+    content_->SetSize(fullWidth(), sz.GetHeight());
+    content_->Move(sz.GetWidth() - fullWidth(), 0);
 }
 
 void OptionsPanel::configure(const DisplayInfo& info,
@@ -477,7 +513,7 @@ void OptionsPanel::configureSettings(ThemeMode mode, bool autostartSupported,
 
 void OptionsPanel::open() {
     Show(true);
-    targetWidth_ = kFullWidth;
+    targetWidth_ = fullWidth();
     if (!anim_.IsRunning()) anim_.Start(16);
 }
 
@@ -489,6 +525,13 @@ void OptionsPanel::close() {
 void OptionsPanel::applyTheme() {
     SetBackgroundColour(theme().windowBg);
     if (content_) content_->SetBackgroundColour(theme().cardBg);
+    // Re-resolve the opened width too: this also runs on a DPI change, where
+    // fullWidth() now yields a different number of physical pixels.
+    if (isOpen()) {
+        targetWidth_ = fullWidth();
+        width_ = targetWidth_;
+        SetMinSize(wxSize(static_cast<int>(width_), -1));
+    }
     rebuild();
 }
 
@@ -508,7 +551,7 @@ void OptionsPanel::rebuildDisplay() {
         return t;
     };
 
-    contentSizer_->AddSpacer(16);
+    contentSizer_->AddSpacer(FromDIP(16));
 
     // Header: display name (ellipsized so it can't overflow) + a Close chip.
     auto* head = new wxBoxSizer(wxHORIZONTAL);
@@ -516,25 +559,25 @@ void OptionsPanel::rebuildDisplay() {
                                      wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
     nameLbl->SetFont(uiFont(12, wxFONTWEIGHT_BOLD));
     nameLbl->SetForegroundColour(th.textPrimary);
-    head->Add(nameLbl, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+    head->Add(nameLbl, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
     head->Add(new Chip(content_, "Close", [this] { if (onClose_) onClose_(); }), 0,
               wxALIGN_CENTER_VERTICAL);
-    contentSizer_->Add(head, 0, wxEXPAND | wxLEFT | wxRIGHT, 16);
+    contentSizer_->Add(head, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(16));
 
     const std::string& conn =
         !info_.connectorLabel.empty() ? info_.connectorLabel : info_.connector;
     if (!conn.empty()) {
         contentSizer_->Add(
             addLabel(wxString::FromUTF8(conn).Upper(), 8, wxFONTWEIGHT_NORMAL, th.textGray), 0,
-            wxLEFT | wxRIGHT | wxTOP, 16);
+            wxLEFT | wxRIGHT | wxTOP, FromDIP(16));
     }
 
     // No adjustable modes reported: say so instead of empty sections.
     if (info_.modes.empty()) {
-        contentSizer_->AddSpacer(16);
+        contentSizer_->AddSpacer(FromDIP(16));
         contentSizer_->Add(
             addLabel("No adjustable display modes", 9, wxFONTWEIGHT_NORMAL, th.textGray), 0,
-            wxLEFT | wxRIGHT, 16);
+            wxLEFT | wxRIGHT, FromDIP(16));
         contentSizer_->AddStretchSpacer();
         content_->Layout();
         return;
@@ -542,11 +585,11 @@ void OptionsPanel::rebuildDisplay() {
 
     // Resolution section (smallest -> 4K). Selecting a resolution keeps the
     // current refresh rate when that rate exists at the new size, else best.
-    contentSizer_->AddSpacer(14);
+    contentSizer_->AddSpacer(FromDIP(14));
     contentSizer_->Add(addLabel("RESOLUTION", 8, wxFONTWEIGHT_BOLD, th.textGray), 0,
-                       wxLEFT | wxRIGHT, 16);
-    contentSizer_->AddSpacer(6);
-    auto* resWrap = new wxWrapSizer(wxHORIZONTAL);
+                       wxLEFT | wxRIGHT, FromDIP(16));
+    contentSizer_->AddSpacer(FromDIP(6));
+    auto* resWrap = new wxWrapSizer(wxHORIZONTAL, wxREMOVE_LEADING_SPACES);
     for (const auto& r : keepCommon(uniqueResolutions(info_.modes), info_.width, info_.height)) {
         const bool sel = (r.width == info_.width && r.height == info_.height);
         const int w = r.width, h = r.height;
@@ -561,25 +604,25 @@ void OptionsPanel::rebuildDisplay() {
             }
             onSetMode_(w, h, keep);
         }, sel);
-        resWrap->Add(chip, 0, wxALL, 3);
+        resWrap->Add(chip, 0, wxALL, FromDIP(3));
     }
-    contentSizer_->Add(resWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, 13);
+    contentSizer_->Add(resWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(13));
 
     // Refresh-rate section (rates available at the current resolution).
-    contentSizer_->AddSpacer(14);
+    contentSizer_->AddSpacer(FromDIP(14));
     contentSizer_->Add(addLabel("REFRESH RATE", 8, wxFONTWEIGHT_BOLD, th.textGray), 0,
-                       wxLEFT | wxRIGHT, 16);
-    contentSizer_->AddSpacer(6);
-    auto* hzWrap = new wxWrapSizer(wxHORIZONTAL);
+                       wxLEFT | wxRIGHT, FromDIP(16));
+    contentSizer_->AddSpacer(FromDIP(6));
+    auto* hzWrap = new wxWrapSizer(wxHORIZONTAL, wxREMOVE_LEADING_SPACES);
     for (int hz : keepCommonHz(refreshRatesAt(info_.modes, info_.width, info_.height),
                                info_.refreshHz)) {
         const bool sel = (hz == info_.refreshHz);
         const int w = info_.width, h = info_.height;
         auto* chip = new Chip(content_, wxString::Format("%d Hz", hz),
                               [this, w, h, hz] { if (onSetMode_) onSetMode_(w, h, hz); }, sel);
-        hzWrap->Add(chip, 0, wxALL, 3);
+        hzWrap->Add(chip, 0, wxALL, FromDIP(3));
     }
-    contentSizer_->Add(hzWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, 13);
+    contentSizer_->Add(hzWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(13));
 
     contentSizer_->AddStretchSpacer();
     content_->Layout();
@@ -594,57 +637,57 @@ void OptionsPanel::rebuildSettings() {
         return t;
     };
 
-    contentSizer_->AddSpacer(16);
+    contentSizer_->AddSpacer(FromDIP(16));
 
     // Header: "Settings" + a Close chip, matching the display panel's layout.
     auto* head = new wxBoxSizer(wxHORIZONTAL);
     auto* nameLbl = new wxStaticText(content_, wxID_ANY, "Settings");
     nameLbl->SetFont(uiFont(12, wxFONTWEIGHT_BOLD));
     nameLbl->SetForegroundColour(th.textPrimary);
-    head->Add(nameLbl, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, 8);
+    head->Add(nameLbl, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
     head->Add(new Chip(content_, "Close", [this] { if (onClose_) onClose_(); }), 0,
               wxALIGN_CENTER_VERTICAL);
-    contentSizer_->Add(head, 0, wxEXPAND | wxLEFT | wxRIGHT, 16);
+    contentSizer_->Add(head, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(16));
 
     // Theme section: System / Light / Dark, radio-style like the resolution chips.
-    contentSizer_->AddSpacer(14);
+    contentSizer_->AddSpacer(FromDIP(14));
     contentSizer_->Add(addLabel("THEME", 8, wxFONTWEIGHT_BOLD, th.textGray), 0,
-                       wxLEFT | wxRIGHT, 16);
-    contentSizer_->AddSpacer(6);
-    auto* themeWrap = new wxWrapSizer(wxHORIZONTAL);
+                       wxLEFT | wxRIGHT, FromDIP(16));
+    contentSizer_->AddSpacer(FromDIP(6));
+    auto* themeWrap = new wxWrapSizer(wxHORIZONTAL, wxREMOVE_LEADING_SPACES);
     auto addThemeChip = [&](const wxString& label, ThemeMode mode) {
         const bool sel = (settingsMode_ == mode);
         auto* chip = new Chip(content_, label, [this, mode] {
             if (onSetTheme_) onSetTheme_(mode);
         }, sel);
-        themeWrap->Add(chip, 0, wxALL, 3);
+        themeWrap->Add(chip, 0, wxALL, FromDIP(3));
     };
     addThemeChip("System", ThemeMode::System);
     addThemeChip("Light", ThemeMode::Light);
     addThemeChip("Dark", ThemeMode::Dark);
-    contentSizer_->Add(themeWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, 13);
+    contentSizer_->Add(themeWrap, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(13));
 
     // Autostart section: On / Off, only where launch-at-login is supported.
     if (autostartSupported_) {
-        contentSizer_->AddSpacer(14);
+        contentSizer_->AddSpacer(FromDIP(14));
         contentSizer_->Add(addLabel("START WITH WINDOWS", 8, wxFONTWEIGHT_BOLD, th.textGray), 0,
-                           wxLEFT | wxRIGHT, 16);
-        contentSizer_->AddSpacer(6);
-        auto* wrap = new wxWrapSizer(wxHORIZONTAL);
+                           wxLEFT | wxRIGHT, FromDIP(16));
+        contentSizer_->AddSpacer(FromDIP(6));
+        auto* wrap = new wxWrapSizer(wxHORIZONTAL, wxREMOVE_LEADING_SPACES);
         auto* onChip = new Chip(content_, "On", [this] {
             if (!autostartEnabled_ && onToggleAutostart_) onToggleAutostart_();
         }, autostartEnabled_);
         auto* offChip = new Chip(content_, "Off", [this] {
             if (autostartEnabled_ && onToggleAutostart_) onToggleAutostart_();
         }, !autostartEnabled_);
-        wrap->Add(onChip, 0, wxALL, 3);
-        wrap->Add(offChip, 0, wxALL, 3);
-        contentSizer_->Add(wrap, 0, wxEXPAND | wxLEFT | wxRIGHT, 13);
+        wrap->Add(onChip, 0, wxALL, FromDIP(3));
+        wrap->Add(offChip, 0, wxALL, FromDIP(3));
+        contentSizer_->Add(wrap, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(13));
     }
 
-    contentSizer_->AddSpacer(20);
+    contentSizer_->AddSpacer(FromDIP(20));
     contentSizer_->Add(new Chip(content_, "Exit App", [this] { if (onExit_) onExit_(); }), 0,
-                       wxLEFT | wxRIGHT, 16);
+                       wxLEFT | wxRIGHT, FromDIP(16));
 
     contentSizer_->AddStretchSpacer();
     content_->Layout();

@@ -45,6 +45,8 @@ private:
     void rebuildCards();                 // re-query displays and redraw the row
     void refreshIfChanged();             // timer tick: rebuild only on change
     void applyTheme();                   // push current theme colours into widgets
+    void applyFonts();                   // (re)resolve header/footer fonts for the current DPI
+    void applyDpiChange();               // re-resolve every DIP-derived size at the current DPI
     void openOptionsFor(const std::string& id);   // open/refresh the side drawer
     void configureDrawer(const std::string& id);  // (re)populate drawer for a display
     void openSettings();                 // open/refresh the settings side drawer
@@ -69,6 +71,7 @@ private:
 
     wxTimer pollTimer_;
     std::string lastSignature_;          // detects display-config changes
+    double dpiScale_ = 1.0;              // last-applied DPI scale; detects monitor changes
 
     TrayIcon* tray_ = nullptr;           // owned by wx; destroyed via RemoveIcon
 };

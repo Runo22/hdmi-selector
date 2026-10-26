@@ -35,6 +35,12 @@ const Theme& theme();
 // A UI font, preferring Segoe UI (Windows) and falling back gracefully.
 wxFont uiFont(int pointSize, wxFontWeight weight = wxFONTWEIGHT_NORMAL);
 
+// `window`'s DPI as a multiplier over the 96-DPI baseline that every hardcoded
+// dimension in the custom-drawn widgets is authored against. Multiply drawing
+// constants by this so they track FromDIP()-sized geometry (and the fonts,
+// which wxWidgets rescales for the window's DPI on its own).
+double dpiScale(const wxWindow* window);
+
 // ---- DisplayCard ---------------------------------------------------------
 // A custom-drawn, clickable card representing one display. Shows a monitor
 // glyph, the display name (dark, bold), the connector/port type (gray), and,
@@ -48,10 +54,17 @@ public:
     DisplayCard(wxWindow* parent, const DisplayInfo& info, std::function<void()> onActivate,
                 std::function<void()> onOptions);
 
+    // Re-resolve the card's size for the window's current DPI. Widgets cache
+    // their min size at construction, so a monitor change leaves them sized
+    // for the old scale until this is called.
+    void updateForDPI();
+
 private:
     void onPaint(wxPaintEvent&);
     void onLeftUp(wxMouseEvent&);
-    void drawGlyph(wxGraphicsContext* gc, double cx, double top, const wxColour& colour);
+    // `s` is the DPI scale factor every drawing constant is multiplied by, so
+    // the card keeps its proportions on any monitor.
+    void drawGlyph(wxGraphicsContext* gc, double cx, double top, const wxColour& colour, double s);
     void animateTo(double target);      // start easing hover_ toward target
     wxRect optionsHotspot() const;      // clickable "options" region (active only)
 
@@ -88,10 +101,13 @@ public:
     bool isOpen() const { return targetWidth_ > 0; }
     void applyTheme();
 
-    static constexpr int kFullWidth = 236;
+    // Opened width, in DIPs; fullWidth() resolves it for the current monitor.
+    static constexpr int kFullWidthDIP = 236;
 
 private:
     enum class Kind { Display, Settings };
+
+    int fullWidth() const { return FromDIP(kFullWidthDIP); }
 
     void rebuild();
     void rebuildDisplay();
@@ -127,6 +143,9 @@ class Chip : public wxWindow {
 public:
     Chip(wxWindow* parent, const wxString& label, std::function<void()> onClick,
          bool filled = false);
+
+    // Re-measure the label at the window's current DPI; see DisplayCard.
+    void updateForDPI();
 
 private:
     void onPaint(wxPaintEvent&);
