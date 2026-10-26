@@ -52,7 +52,9 @@ bool setEnabled(bool enable, std::string* error) {
     }
 
     if (enable) {
-        const std::wstring cmd = quotedExePath();
+        // The flag is what makes a login-time launch stay in the tray; see
+        // kTrayFlag and App::OnInit.
+        const std::wstring cmd = quotedExePath() + L" --tray";
         rc = RegSetValueExW(key, kValueName, 0, REG_SZ,
                             reinterpret_cast<const BYTE*>(cmd.c_str()),
                             static_cast<DWORD>((cmd.size() + 1) * sizeof(wchar_t)));
@@ -69,6 +71,10 @@ bool setEnabled(bool enable, std::string* error) {
     return true;
 }
 
+void refresh() {
+    if (isEnabled()) setEnabled(true, nullptr);
+}
+
 #else  // Non-Windows: stubs so the GUI compiles/tests on other platforms.
 
 bool isSupported() { return false; }
@@ -77,6 +83,7 @@ bool setEnabled(bool, std::string* error) {
     if (error) *error = "launch-at-login is only supported on Windows";
     return false;
 }
+void refresh() {}
 
 #endif  // _WIN32
 

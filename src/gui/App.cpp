@@ -8,6 +8,7 @@
 
 #include "MainFrame.h"
 #include "Widgets.h"
+#include "hdmi/Autostart.h"
 #include "hdmi/DisplayManager.h"
 #include "hdmi/ModeStore.h"
 #include "hdmi/RestServer.h"
@@ -52,8 +53,18 @@ public:
         cfg.port = std::atoi(envOr("HDMI_PORT", "8420").c_str());
         cfg.token = envOr("HDMI_TOKEN", "");
 
+        // Started by the login-time Run entry: stay in the tray instead of
+        // opening the window on whatever display happens to be active.
+        bool startHidden = false;
+        for (int i = 1; i < argc; ++i) {
+            if (wxString(argv[i]) == hdmi::autostart::kTrayFlag) startHidden = true;
+        }
+        // Pick up the tray flag (and the current exe path) for entries written
+        // by an earlier version, so this works without re-toggling the setting.
+        hdmi::autostart::refresh();
+
         auto* frame = new hdmi::MainFrame(*manager_, cfg);
-        frame->Show(true);
+        frame->Show(!startHidden);
         return true;
     }
 
